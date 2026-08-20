@@ -1,0 +1,10 @@
+本仓库源码继承自 MathModelAgent（https://github.com/jihe520/MathModelAgent）。
+
+原作者许可条款（见其 docs/md/License.md）：
+
+个人免费使用，请勿商业用途，商业用途联系原作者
+禁止闭源分发
+不可在其基础上提供商业服务
+
+本仓库作为开源续作，继续遵守上述条款。
+本仓库对 WebUI 的后续改动同样按上述条款分发。

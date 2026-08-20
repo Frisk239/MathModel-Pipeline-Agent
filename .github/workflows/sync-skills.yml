@@ -1,0 +1,41 @@
+name: Sync upstream skills
+
+on:
+  schedule:
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clone upstream
+        run: git clone --depth 1 https://github.com/jihe520/MathModelAgent.git /tmp/upstream
+
+      - name: Mirror skills/
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rsync
+          rsync -a --delete --exclude fonts --exclude '.git' /tmp/upstream/skills/ ./skills/
+          SHA="$(git -C /tmp/upstream rev-parse HEAD)"
+          jq --arg sha "$SHA" '.skills_synced_sha = $sha' vendor/upstream.json > /tmp/upstream.json
+          mv /tmp/upstream.json vendor/upstream.json
+
+      - name: Open PR if changed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(skills): sync from jihe520/MathModelAgent"
+          title: "chore(skills): sync from upstream MathModelAgent"
+          body: |
+            自动从 [jihe520/MathModelAgent](https://github.com/jihe520/MathModelAgent) 同步 `skills/`。
+            不自动覆盖 `backend/`、`frontend/`。
+            请人工核对后再合并。
+          branch: chore/sync-upstream-skills
+          delete-branch: true

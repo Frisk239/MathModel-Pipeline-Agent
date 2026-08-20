@@ -1,0 +1,62 @@
+name: Watch upstream WebUI
+
+on:
+  schedule:
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Diff upstream backend/frontend
+        id: diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          WATCHED="$(jq -r .webui_watched_sha vendor/upstream.json)"
+          NEW="$(gh api repos/jihe520/MathModelAgent/commits/main --jq .sha)"
+          echo "watched=$WATCHED" >> "$GITHUB_OUTPUT"
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          if [ "$WATCHED" = "$NEW" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh api "repos/jihe520/MathModelAgent/compare/${WATCHED}...${NEW}" --jq '[.files[].filename | select(startswith("backend/") or startswith("frontend/"))] | join("\n")' > /tmp/webui-diff.txt
+          if [ ! -s /tmp/webui-diff.txt ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          cat /tmp/webui-diff.txt
+
+      - name: Open issue
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="upstream WebUI changed (${{ steps.diff.outputs.new }})"
+          if gh issue list --search "$TITLE" --json number --jq 'length' | grep -vq '^0$'; then
+            echo "issue already open"
+            exit 0
+          fi
+          gh issue create --title "$TITLE" --body "$(cat <<EOF
+          上游 [MathModelAgent](https://github.com/jihe520/MathModelAgent) 的 \`backend/\` 或 \`frontend/\` 有更新。
+
+          - watched: \`${{ steps.diff.outputs.watched }}\`
+          - upstream HEAD: \`${{ steps.diff.outputs.new }}\`
+
+          本仓库接任 WebUI，**不会自动覆盖**。请人工决定是否摘取。
+
+          \`\`\`
+          $(cat /tmp/webui-diff.txt)
+          \`\`\`
+          EOF
+          )"

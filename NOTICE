@@ -1,0 +1,21 @@
+MathModel-Pipeline-Agent
+========================
+
+This project is based on MathModelAgent by jihe520:
+
+  https://github.com/jihe520/MathModelAgent
+
+Copied upstream revision: 83d8783187a2d29dda1b046cb667009cc50c8203
+(2026-08-17, docs: 引用 sci-box 科研图表与流程图仓库)
+
+What we inherit
+---------------
+- WebUI (backend + frontend) and the four-agent modeling workflow
+- skills/ contest templates, writing, and verification
+
+What this repository does
+-------------------------
+- Continues and improves the WebUI / Harness
+- Mirrors skills/ from upstream on a schedule; does not auto-overwrite backend/ or frontend/
+
+Do not treat this as the official MathModelAgent project.

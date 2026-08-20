@@ -1,0 +1,65 @@
+.vscode/
+.idea/
+.DS_Store
+*.DS_Store
+._*
+dump.rdb
+settings.local.json
+
+# local env
+.env
+.env.local
+.env.dev
+.env.production
+.env.test
+backend/.env.dev
+frontend/.env
+frontend/.env.local
+frontend/.env.production
+frontend/.env.test
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+backend/.venv/
+backend/venv/
+backend/logs/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# task outputs
+backend/project/work_dir/*
+!backend/project/work_dir/.gitkeep
+
+# CJK fonts in skills templates (copyright; install locally)
+skills/5writing/templates/**/fonts/
+
+# LaTeX build artifacts
+skills/5writing/templates/**/*.aux
+skills/5writing/templates/**/*.log
+skills/5writing/templates/**/*.toc
+skills/5writing/templates/**/*.out
+skills/5writing/templates/**/missfont.log
+skills/5writing/templates/**/main.pdf
+
+# local clones / agent memory / notes
+.memory/
+reference/
+docs/
+
+# OS
+Thumbs.db
+Desktop.ini

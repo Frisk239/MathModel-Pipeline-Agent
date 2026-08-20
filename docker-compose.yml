@@ -1,0 +1,52 @@
+# docker-compose.yml
+
+services:
+  redis:
+    image: redis:alpine
+    container_name: mathmodelagent_redis
+    ports:
+      - "6379:6379" # 将 Redis 容器的 6379 端口映射到主机的 6379 端口
+    volumes:
+      - redis_data:/data # Redis 数据的持久化存储卷
+
+  backend:
+    build:
+      context: ./backend # Dockerfile 的上下文路径
+      dockerfile: Dockerfile # Dockerfile 文件名
+    container_name: mathmodelagent_backend
+    ports:
+      - "8000:8000" # 将后端容器的 8000 端口映射到主机的 8000 端口
+    env_file:
+      - ./backend/.env.dev #从此文件加载环境变量
+    environment:
+      - ENV=DEV # 为后端显式设置 ENV
+      # .env.dev 文件中的 REDIS_URL 应为 redis://redis:6379/0
+    volumes:
+      - ./backend:/app # 挂载后端代码以实现热重载 (开发环境)
+      - ./backend/project/work_dir:/app/project/work_dir # 持久化生成的文件
+      - backend_venv:/app/.venv # 可选：持久化 venv 以在依赖不变时加快后续构建速度
+    depends_on:
+      - redis # 确保 Redis 在后端启动前启动
+    stdin_open: true # 保持标准输入打开
+    tty: true      # 分配一个伪终端
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mathmodelagent_frontend
+    ports:
+      - "5173:5173" # 将前端容器的 5173 端口 (Vite 默认) 映射到主机的 5173 端口
+    env_file:
+      - ./frontend/.env.development # 加载前端的环境变量
+    volumes:
+      - ./frontend:/app # 挂载前端代码以实现热重载 (开发环境)
+      - /app/node_modules # 匿名卷，防止主机的 node_modules 覆盖容器内的
+    depends_on:
+      - backend # 确保后端可用 (尽管前端通常只需要其 URL)
+    stdin_open: true
+    tty: true
+
+volumes:
+  redis_data: # 定义用于 Redis 持久化的命名卷
+  backend_venv: # 定义用于后端 venv 的命名卷
