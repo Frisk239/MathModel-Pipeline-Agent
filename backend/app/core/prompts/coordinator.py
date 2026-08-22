@@ -5,12 +5,13 @@ FORMAT_QUESTIONS_PROMPT = """
 
 ```json
 {
-  "title": <题目标题>      
+  "title": <题目标题>,
   "background": <题目背景，用户输入的一切不在title，ques1，ques2，ques3...中的内容都视为问题背景信息background>,
   "ques_count": <问题数量,number,int>,
   "ques1": <问题1>,
   "ques2": <问题2>,
   "ques3": <问题3,用户输入的存在多少问题，就输出多少问题ques1,ques2,ques3...以此类推>,
+  "required_files": <题目明确要求使用的附件名称数组，如 ["附件1", "附件2"]；题目未提及附件时输出空数组 []>
 }
 ```
 """

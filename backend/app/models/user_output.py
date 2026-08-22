@@ -83,9 +83,8 @@ class UserOutput:
         Returns:
             替换引用为 UUID 后的文本。
         """
-        # 匹配引用内容，格式为 {[^数字]: 引用内容}
-        # 修改正则表达式，匹配大括号包裹的引用格式
-        references = re.findall(r"\{\[\^(\d+)\]:\s*(.*?)\}", text, re.DOTALL)
+        # 匹配引用内容，兼容 {[^数字]: 内容} 与 {[^数字] 内容} 两种格式
+        references = re.findall(r"\{\[\^(\d+)\]:?\s*(.*?)\}", text, re.DOTALL)
 
         for ref_num, ref_content in references:
             # 清理引用内容，去除末尾的空格和点号
@@ -101,7 +100,7 @@ class UserOutput:
             if existing_uuid:
                 # 如果已存在，使用现有的UUID
                 text = re.sub(
-                    rf"\{{\[\^{ref_num}\]:.*?\}}",
+                    rf"\{{\[\^{ref_num}\]:?.*?\}}",
                     f"[{existing_uuid}]",
                     text,
                     flags=re.DOTALL,
@@ -113,7 +112,7 @@ class UserOutput:
                     "content": ref_content,
                 }
                 text = re.sub(
-                    rf"\{{\[\^{ref_num}\]:.*?\}}",
+                    rf"\{{\[\^{ref_num}\]:?.*?\}}",
                     f"[{new_uuid}]",
                     text,
                     flags=re.DOTALL,

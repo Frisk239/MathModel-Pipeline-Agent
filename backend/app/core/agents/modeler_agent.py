@@ -8,7 +8,6 @@ from app.schemas.A2A import CoordinatorToModeler, ModelerToCoder
 from app.utils.log_util import logger
 import json
 import re
-from icecream import ic  # type: ignore[import-unresolved]
 
 MAX_JSON_RETRIES = 3
 
@@ -98,7 +97,6 @@ class ModelerAgent(Agent):
 
             questions_solution = repair_json(json_str)
             if questions_solution:
-                ic(questions_solution)
                 return ModelerToCoder(questions_solution=questions_solution)
 
             attempt += 1

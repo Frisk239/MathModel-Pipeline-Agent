@@ -7,6 +7,7 @@ from app.core.prompts import get_writer_prompt
 from app.schemas.enums import CompTemplate, FormatOutPut
 from app.config.setting import ApiType
 from app.tools.openalex_scholar import OpenAlexScholar
+from app.tools.exa_search import ExaSearch
 from app.utils.log_util import logger
 from app.services.redis_manager import redis_manager
 from app.schemas.response import SystemMessage, WriterMessage
@@ -29,6 +30,7 @@ class WriterAgent(Agent):
         comp_template: CompTemplate = CompTemplate.CHINA,
         format_output: FormatOutPut = FormatOutPut.Markdown,
         scholar: OpenAlexScholar | None = None,
+        exa: ExaSearch | None = None,
         context_window: int = 128000,
         cancel_event: asyncio.Event | None = None,
     ) -> None:
@@ -36,6 +38,7 @@ class WriterAgent(Agent):
         self.format_out_put = format_output
         self.comp_template = comp_template
         self.scholar = scholar
+        self.exa = exa
         self.is_first_run = True
         self.system_prompt = get_writer_prompt(format_output)
         self.available_images: list[str] = []
@@ -95,75 +98,111 @@ class WriterAgent(Agent):
         footnotes = []
         response_content: str = ""
 
-        if response.tool_calls:
-            logger.info("检测到工具调用")
+        # 工具调用循环：模型可能连续多次检索（换关键词/换工具），直到给出正文
+        max_tool_rounds = 6
+        tool_rounds = 0
+        while response.tool_calls and tool_rounds < max_tool_rounds:
+            tool_rounds += 1
             tool_call = response.tool_calls[0]
-            tool_id = tool_call.id
-            if tool_call.name == "search_papers":
-                logger.info("调用工具: search_papers")
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(content=f"写作手调用{tool_call.name}工具"),
-                )
+            if tool_call.name not in ("search_papers", "search_web"):
+                logger.warning(f"未知工具 {tool_call.name}，跳出工具循环")
+                break
 
-                query = json.loads(tool_call.arguments)["query"]
+            logger.info(f"调用工具: {tool_call.name}（第{tool_rounds}轮）")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=f"写作手调用{tool_call.name}工具"),
+            )
 
-                await redis_manager.publish_message(
-                    self.task_id,
-                    WriterMessage(
-                        content=query,
-                    ),
-                )
+            query = json.loads(tool_call.arguments)["query"]
 
-                # 更新对话历史 - 添加助手的响应
-                assistant_msg: dict = {"role": "assistant", "content": response.content}
-                if response.reasoning_content:
-                    assistant_msg["reasoning_content"] = response.reasoning_content
-                if response.tool_calls:
-                    assistant_msg["tool_calls"] = [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.name, "arguments": tc.arguments},
-                        }
-                        for tc in response.tool_calls
-                    ]
-                await self.append_chat_history(assistant_msg)
+            await redis_manager.publish_message(
+                self.task_id,
+                WriterMessage(
+                    content=query,
+                ),
+            )
 
-                try:
-                    assert self.scholar is not None, "scholar 未初始化"
-                    papers = await self.scholar.search_papers(query)
-                except Exception as e:
-                    error_msg = f"搜索文献失败: {str(e)}"
-                    logger.error(error_msg)
-                    return WriterResponse(
-                        response_content=error_msg, footnotes=footnotes
-                    )
-                # TODO: pass to frontend
-                assert self.scholar is not None, "scholar 未初始化"
-                papers_str = self.scholar.papers_to_str(papers)
-                logger.info(f"搜索文献结果\n{papers_str}")
-                await self.append_chat_history(
-                    {
-                        "role": "tool",
-                        "content": papers_str,
-                        "tool_call_id": tool_id,
-                        "name": "search_papers",
-                    }
-                )
-                next_response = await self._chat(
-                    history=self.chat_history,
-                    tools=tools,
-                    tool_choice="auto",
-                    agent_name=self.__class__.__name__,
-                    sub_title=sub_title,
-                )
-                response_content = next_response.content or ""
-        else:
-            response_content = response.content or ""
+            # 更新对话历史 - 添加助手的响应
+            assistant_msg: dict = {"role": "assistant", "content": response.content}
+            if response.reasoning_content:
+                assistant_msg["reasoning_content"] = response.reasoning_content
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": tc.arguments},
+                }
+                for tc in response.tool_calls
+            ]
+            await self.append_chat_history(assistant_msg)
+
+            try:
+                search_str = await self._run_search(tool_call.name, query)
+            except Exception as e:
+                # 理论上 _run_search 内部已降级，此处兜底防止错误文案进入论文
+                logger.error(f"搜索工具异常: {str(e)}")
+                search_str = "搜索服务暂时不可用，请基于已有材料继续撰写本节。"
+            logger.info(f"搜索结果\n{search_str}")
+            await self.append_chat_history(
+                {
+                    "role": "tool",
+                    "content": search_str,
+                    "tool_call_id": tool_call.id,
+                    "name": tool_call.name,
+                }
+            )
+
+            response = await self._chat(
+                history=self.chat_history,
+                tools=tools,
+                tool_choice="auto",
+                agent_name=self.__class__.__name__,
+                sub_title=sub_title,
+            )
+
+        if response.tool_calls:
+            # 超出工具轮次上限仍在请求工具：强制直接输出，避免空章节
+            logger.warning("工具调用超过轮次上限，强制要求直接输出内容")
+            await self.append_chat_history(
+                {
+                    "role": "user",
+                    "content": "工具调用次数已达上限，请立即直接输出本节内容，不要再调用任何工具。",
+                }
+            )
+            response = await self._chat(
+                history=self.chat_history,
+                agent_name=self.__class__.__name__,
+                sub_title=sub_title,
+            )
+
+        response_content = response.content or ""
+        if not response_content:
+            logger.warning(f"章节内容为空（sub_title={sub_title}），已返回占位提示")
+            response_content = "（本节生成失败，请重试）"
         self.chat_history.append({"role": "assistant", "content": response_content, "reasoning_content": response.reasoning_content} if response.reasoning_content else {"role": "assistant", "content": response_content})
         logger.info(f"{self.__class__.__name__}:完成:执行对话")
         return WriterResponse(response_content=response_content, footnotes=footnotes)
+
+    async def _run_search(self, tool_name: str, query: str) -> str:
+        """执行文献/网页搜索并格式化结果。
+
+        搜索失败时返回降级提示而不是错误文案，避免内部信息泄露进论文正文。
+        """
+        try:
+            if tool_name == "search_web":
+                assert self.exa is not None, "exa 未初始化"
+                results = await self.exa.search(query)
+                return self.exa.results_to_str(results)
+            assert self.scholar is not None, "scholar 未初始化"
+            papers = await self.scholar.search_papers(query)
+            return self.scholar.papers_to_str(papers)
+        except Exception as e:
+            logger.error(f"搜索工具 {tool_name} 失败: {str(e)}")
+            return (
+                "搜索服务暂时不可用。请基于已有材料继续撰写本节内容，"
+                "不要在论文正文中提及搜索失败或本条提示。"
+            )
 
     async def summarize(self) -> str:
         """总结对话内容，生成任务执行摘要。"""

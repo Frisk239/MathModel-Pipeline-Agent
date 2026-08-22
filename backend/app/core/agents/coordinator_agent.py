@@ -56,8 +56,15 @@ class CoordinatorAgent(Agent):
 
                 questions = json.loads(json_str)
                 ques_count = questions["ques_count"]
+                required_files = questions.get("required_files") or []
+                if not isinstance(required_files, list):
+                    required_files = [str(required_files)]
                 logger.info(f"questions:{questions}")
-                return CoordinatorToModeler(questions=questions, ques_count=ques_count)
+                return CoordinatorToModeler(
+                    questions=questions,
+                    ques_count=ques_count,
+                    required_files=[str(f) for f in required_files],
+                )
 
             except (json.JSONDecodeError, ValueError, KeyError) as e:
                 attempt += 1
