@@ -30,7 +30,23 @@ writer_tools = [
         "type": "function",
         "function": {
             "name": "search_papers",
-            "description": "Search for papers using a query string.",
+            "description": "Search for academic papers via OpenAlex. Returns structured bibliographic metadata (authors, year, venue, DOI, citations) - preferred for formal reference lists.",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The query string"}
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_web",
+            "description": "Semantic web search via Exa. Stronger for Chinese queries, recent technical resources, and real-world implementations. Use when search_papers returns weak results.",
             "strict": True,
             "parameters": {
                 "type": "object",
@@ -67,7 +83,18 @@ coder_tools_anthropic = [
 writer_tools_anthropic = [
     {
         "name": "search_papers",
-        "description": "Search for papers using a query string.",
+        "description": "Search for academic papers via OpenAlex. Returns structured bibliographic metadata (authors, year, venue, DOI, citations) - preferred for formal reference lists.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The query string"}
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_web",
+        "description": "Semantic web search via Exa. Stronger for Chinese queries, recent technical resources, and real-world implementations. Use when search_papers returns weak results.",
         "input_schema": {
             "type": "object",
             "properties": {
