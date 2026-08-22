@@ -39,11 +39,21 @@ const route = useRoute();
 const taskId = route.params.task_id;
 const { toast } = useToast();
 
+/** 工作区文件条目 */
+interface FileItem {
+	name?: string;
+	filename?: string;
+	file_type?: string;
+	size?: number;
+	modified_time?: string;
+	type?: string;
+}
+
 /** 文件列表弹窗显示状态 */
 const fileListVisible = ref(false);
 
 /** 文件列表数据 */
-const fileList = ref<Record<string, unknown>[]>([]);
+const fileList = ref<FileItem[]>([]);
 
 /** 加载状态 */
 const loadingFiles = ref(false);
@@ -203,7 +213,12 @@ const downloadAll = async () => {
       <SheetHeader>
         <SheetTitle class="flex items-center justify-between mr-5">
           工作区文件
-
+          <Button v-if="fileList.length > 0" @click="downloadAll" :disabled="downloadingAll"
+            size="sm" variant="ghost" class="flex gap-1">
+            <Archive v-if="downloadingAll" class="w-4 h-4 animate-spin" />
+            <Download v-else class="w-4 h-4" />
+            全部下载
+          </Button>
         </SheetTitle>
         <SheetDescription>
           运行的结果和产生在<span class="font-mono">backend/project/work_dir/{{ taskId }}/*</span> 目录下
@@ -228,7 +243,7 @@ const downloadAll = async () => {
                   <span v-if="file.size">{{ formatFileSize(file.size) }}</span>
                   <span v-if="file.modified_time">{{ new Date(file.modified_time).toLocaleDateString()
                     }}</span>
-                  <span v-if="file.type">{{ file.type }}</span>
+                  <span v-if="file.file_type">{{ file.file_type }}</span>
                 </div>
               </div>
               <TooltipProvider>

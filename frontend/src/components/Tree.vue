@@ -10,8 +10,11 @@ import {
 	SidebarMenuSub,
 } from "@/components/ui/sidebar";
 import { ChevronRight, File, Folder } from "lucide-vue-next";
+/** 文件树节点：文件名字符串或 [目录名, 子节点...] */
+type TreeNode = string | TreeNode[];
+
 const props = defineProps<{
-	item: string | unknown[];
+	item: TreeNode;
 }>();
 const [name, ...items] = Array.isArray(props.item) ? props.item : [props.item];
 </script>

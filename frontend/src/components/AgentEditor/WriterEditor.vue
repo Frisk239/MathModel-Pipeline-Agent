@@ -2,7 +2,7 @@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { renderMarkdown } from "@/utils/markdown";
 import type { WriterMessage } from "@/utils/response";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 
 // ---- Types ----
 

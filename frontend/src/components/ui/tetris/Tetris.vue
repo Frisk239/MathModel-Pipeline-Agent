@@ -114,9 +114,9 @@ function calcGrid() {
 watch(width, calcGrid);
 
 // eslint-disable-next-line no-undef
-let intervalId: NodeJS.Timeout | undefined;
+let intervalId: ReturnType<typeof setTimeout> | undefined;
 // eslint-disable-next-line no-undef
-let timeoutId: NodeJS.Timeout | undefined;
+let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
 onMounted(() => {
 	timeoutId = setTimeout(calcGrid, 50);

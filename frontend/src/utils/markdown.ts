@@ -1,6 +1,6 @@
 import katex from "katex";
 import { marked } from "marked";
-import type { Renderer, RendererObject, Token } from "marked";
+import type { Renderer, RendererObject } from "marked";
 
 // 默认的markdown渲染配置
 const defaultOptions = {

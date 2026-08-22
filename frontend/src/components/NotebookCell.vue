@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { CodeCell, NoteCell, ResultCell } from "@/utils/interface";
 import { renderMarkdown } from "@/utils/markdown";
-import type { CodeExecutionResult } from "@/utils/response";
+import type { OutputItem } from "@/utils/response";
 
 // ---- Props ----
 
@@ -12,7 +12,7 @@ defineProps<{
 // ---- Methods ----
 
 /** 获取结果格式对应的 CSS 类 */
-const getResultClass = (result: CodeExecutionResult) => {
+const getResultClass = (result: OutputItem) => {
 	switch (result.res_type) {
 		case "stdout":
 			return "text-gray-600";
@@ -26,7 +26,7 @@ const getResultClass = (result: CodeExecutionResult) => {
 };
 
 /** 判断结果是否为图片格式 */
-const isImageResult = (result: CodeExecutionResult) => {
+const isImageResult = (result: OutputItem) => {
 	return (
 		result.res_type === "result" &&
 		["png", "jpeg", "svg"].includes(result.format as string)
@@ -34,12 +34,12 @@ const isImageResult = (result: CodeExecutionResult) => {
 };
 
 /** 判断结果是否为 LaTeX 格式 */
-const isLatexResult = (result: CodeExecutionResult) => {
+const isLatexResult = (result: OutputItem) => {
 	return result.res_type === "result" && result.format === "latex";
 };
 
 /** 判断结果是否为 JSON 格式 */
-const isJsonResult = (result: CodeExecutionResult) => {
+const isJsonResult = (result: OutputItem) => {
 	return result.res_type === "result" && result.format === "json";
 };
 
