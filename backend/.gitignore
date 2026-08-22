@@ -14,3 +14,4 @@ config/latex-template/
 logs/
 
 .env.dev
+data/
