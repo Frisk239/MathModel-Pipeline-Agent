@@ -1,16 +1,17 @@
 import request from "@/utils/request";
 
+/** 工作区文件条目（与后端 /files 返回结构一致） */
+export interface WorkspaceFile {
+	filename: string;
+	file_type: string;
+}
+
 /**
  * 获取任务工作区文件列表
  * @param task_id 任务ID
  */
 export function getFiles(task_id: string) {
-	return request.get<{
-		files: {
-			filename: string;
-			file_type: string;
-		}[];
-	}>("/files", {
+	return request.get<WorkspaceFile[]>("/files", {
 		params: { task_id },
 	});
 }
