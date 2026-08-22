@@ -3,6 +3,9 @@
 from abc import ABC, abstractmethod
 from app.core.llm.types import StandardResponse
 
+# 出站请求统一 User-Agent：部分中转站 WAF 直接屏蔽 OpenAI/Python 等 SDK 默认 UA
+HTTP_USER_AGENT = "MathModelAgent/0.1"
+
 
 class BaseProvider(ABC):
     """LLM Provider 基类，定义统一的调用接口。"""
@@ -18,6 +21,8 @@ class BaseProvider(ABC):
         tool_choice: str | None = None,
         max_tokens: int | None = None,
         top_p: float | None = None,
+        reasoning_effort: str | None = None,
+        thinking_budget: int | None = None,
     ) -> StandardResponse:
         """调用 LLM 并返回标准化响应。
 
@@ -30,6 +35,8 @@ class BaseProvider(ABC):
             tool_choice: 工具选择策略。
             max_tokens: 最大生成 token 数。
             top_p: 采样温度参数。
+            reasoning_effort: 思考深度档位（如 low/medium/high/max），由各协议映射。
+            thinking_budget: Anthropic 协议的思考 token 预算（budget_tokens）。
 
         Returns:
             标准化响应。

@@ -16,7 +16,7 @@ class ApiType(str, Enum):
 
 
 def parse_cors(value: str) -> list[str]:
-    """将 CORS 配置字符串解析为 URL 列表。
+    """解析 CORS 配置字符串为 URL 列表。
 
     Args:
         value: 逗号分隔的 URL 字符串，或 "*" 表示允许所有来源。
@@ -31,6 +31,16 @@ def parse_cors(value: str) -> list[str]:
     return [value]
 
 
+def _empty_to_none(v):
+    """空字符串转 None（前端清空输入框保存时 .env 会产生空值）。"""
+    if isinstance(v, str) and not v.strip():
+        return None
+    return v
+
+
+OptionalInt = Annotated[Optional[int], BeforeValidator(_empty_to_none)]
+
+
 class Settings(BaseSettings):
     """全局应用配置，从环境变量和 .env 文件加载。"""
     ENV: str = "dev"
@@ -39,29 +49,48 @@ class Settings(BaseSettings):
     COORDINATOR_API_KEY: Optional[str] = None
     COORDINATOR_MODEL: Optional[str] = None
     COORDINATOR_BASE_URL: Optional[str] = None
-    COORDINATOR_MAX_TOKENS: Optional[int] = None
+    COORDINATOR_MAX_TOKENS: OptionalInt = None
     COORDINATOR_CONTEXT_WINDOW: int = 128000
+    COORDINATOR_REASONING_EFFORT: Optional[str] = None
+    COORDINATOR_THINKING_BUDGET: OptionalInt = None
 
     MODELER_API_TYPE: Optional[ApiType] = None
     MODELER_API_KEY: Optional[str] = None
     MODELER_MODEL: Optional[str] = None
     MODELER_BASE_URL: Optional[str] = None
-    MODELER_MAX_TOKENS: Optional[int] = None
+    MODELER_MAX_TOKENS: OptionalInt = None
     MODELER_CONTEXT_WINDOW: int = 128000
+    MODELER_REASONING_EFFORT: Optional[str] = None
+    MODELER_THINKING_BUDGET: OptionalInt = None
 
     CODER_API_TYPE: Optional[ApiType] = None
     CODER_API_KEY: Optional[str] = None
     CODER_MODEL: Optional[str] = None
     CODER_BASE_URL: Optional[str] = None
-    CODER_MAX_TOKENS: Optional[int] = None
+    CODER_MAX_TOKENS: OptionalInt = None
     CODER_CONTEXT_WINDOW: int = 128000
+    CODER_REASONING_EFFORT: Optional[str] = None
+    CODER_THINKING_BUDGET: OptionalInt = None
 
     WRITER_API_TYPE: Optional[ApiType] = None
     WRITER_API_KEY: Optional[str] = None
     WRITER_MODEL: Optional[str] = None
     WRITER_BASE_URL: Optional[str] = None
-    WRITER_MAX_TOKENS: Optional[int] = None
+    WRITER_MAX_TOKENS: OptionalInt = None
     WRITER_CONTEXT_WINDOW: int = 128000
+    WRITER_REASONING_EFFORT: Optional[str] = None
+    WRITER_THINKING_BUDGET: OptionalInt = None
+
+    # 评审模型（G2-L2 代码评审 / G4 终审 / 建模预审）；缺省回退 Coordinator 配置
+    REVIEW_API_TYPE: Optional[ApiType] = None
+    REVIEW_API_KEY: Optional[str] = None
+    REVIEW_MODEL: Optional[str] = None
+    REVIEW_BASE_URL: Optional[str] = None
+    REVIEW_MAX_TOKENS: OptionalInt = None
+
+    # 人工检查点（二期真实生效）；AUTO_MODE=true 时全部跳过
+    HIL_ENABLED: bool = True
+    AUTO_MODE: bool = False
 
     MAX_CHAT_TURNS: Optional[int] = None
     MAX_RETRIES: Optional[int] = None
@@ -72,10 +101,9 @@ class Settings(BaseSettings):
     REDIS_MAX_CONNECTIONS: int = 10
     CORS_ALLOW_ORIGINS: Annotated[list[str] | str, BeforeValidator(parse_cors)] = "*"
     SERVER_HOST: str = "http://localhost:8000"
-    DEEPSEEK_MODEL: Optional[str] = None
-    DEEPSEEK_BASE_URL: Optional[str] = None
     OPENALEX_EMAIL: Optional[str] = None
     OPENALEX_API_KEY: Optional[str] = None
+    EXA_API_KEY: Optional[str] = None
 
     # Web Search 配置（Tavily API）
     TAVILY_API_KEY: Optional[str] = None
@@ -89,20 +117,20 @@ class Settings(BaseSettings):
     RAG_EMBEDDING_MODEL: str = "BAAI/bge-m3"
     RAG_RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
 
-    # HIL 人机协作配置
-    HIL_ENABLED: bool = True
-    HIL_TIMEOUT: int = 300  # 审批超时时间（秒）
+    # 人工检查点开关（沿用上游键名，二期真实生效）
+    HIL_TIMEOUT: int = 300  # 审批超时提示时间（秒）；无响应仍永久等待，绝不自动放行
     HIL_CHECKPOINTS: dict = {
-        "problem_split": True,
-        "model_selection": True,
-        "code_review": False,
-        "paper_review": True,
+        "problem_split": True,   # ① 拆题后
+        "model_selection": True, # ② 建模方案后
+        "code_review": False,    # ③ 代码方案后（不设人工检查点，由 G2 覆盖）
+        "paper_review": True,    # ④ 终稿前
     }
 
     model_config = SettingsConfigDict(
         env_file=".env.dev",
         env_file_encoding="utf-8",
         extra="allow",
+        validate_assignment=True,
     )
 
     @classmethod

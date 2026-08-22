@@ -2,8 +2,18 @@
 
 import json as _json
 from anthropic import AsyncAnthropic
-from app.core.llm.providers.base import BaseProvider
+from app.core.llm.providers.base import BaseProvider, HTTP_USER_AGENT
 from app.core.llm.types import StandardResponse, ToolCall, Usage
+
+# 思考深度档位到 budget_tokens 的换算表（Anthropic 协议只接受数值预算）
+EFFORT_TO_BUDGET: dict[str, int] = {
+    "low": 8192,
+    "medium": 16384,
+    "high": 32768,
+    "max": 65536,
+    "minimal": 2048,
+    "xhigh": 65536,
+}
 
 
 class AnthropicProvider(BaseProvider):
@@ -19,15 +29,23 @@ class AnthropicProvider(BaseProvider):
         tool_choice: str | None = None,
         max_tokens: int | None = None,
         top_p: float | None = None,
+        reasoning_effort: str | None = None,
+        thinking_budget: int | None = None,
     ) -> StandardResponse:
-        client = AsyncAnthropic(api_key=api_key, base_url=base_url)
+        client = AsyncAnthropic(
+            api_key=api_key,
+            base_url=base_url,
+            default_headers={"User-Agent": HTTP_USER_AGENT},
+        )
 
         system_prompt, anthropic_messages = self._convert_messages(messages)
+
+        effective_max_tokens = max_tokens or 4096
 
         kwargs: dict = {
             "model": model,
             "messages": anthropic_messages,
-            "max_tokens": max_tokens or 4096,
+            "max_tokens": effective_max_tokens,
         }
         if system_prompt:
             kwargs["system"] = system_prompt
@@ -37,6 +55,12 @@ class AnthropicProvider(BaseProvider):
             kwargs["tools"] = self._convert_tools(tools)
             if tool_choice:
                 kwargs["tool_choice"] = self._convert_tool_choice(tool_choice)
+
+        thinking = self._build_thinking(
+            reasoning_effort, thinking_budget, effective_max_tokens
+        )
+        if thinking:
+            kwargs["thinking"] = thinking
 
         response = await client.messages.create(**kwargs)
 
@@ -61,6 +85,29 @@ class AnthropicProvider(BaseProvider):
         )
 
         return StandardResponse(content=content, tool_calls=tool_calls, usage=usage)
+
+    def _build_thinking(
+        self,
+        reasoning_effort: str | None,
+        thinking_budget: int | None,
+        max_tokens: int,
+    ) -> dict | None:
+        """组装 Anthropic thinking 参数。
+
+        off 无条件关闭；显式 thinking_budget 优先；否则按 effort 档位换算。
+        Anthropic 要求 1024 <= budget_tokens < max_tokens，越界时收敛到边界。
+        """
+        if reasoning_effort == "off":
+            return None
+        budget = thinking_budget
+        if budget is None and reasoning_effort:
+            # 未收录的档位（部分供应商的自定义档）无法换算，保持不开启
+            budget = EFFORT_TO_BUDGET.get(reasoning_effort)
+        if budget is None:
+            return None
+
+        budget = max(1024, min(budget, max_tokens - 1024))
+        return {"type": "enabled", "budget_tokens": budget}
 
     def _convert_messages(self, messages: list[dict]) -> tuple[str | None, list[dict]]:
         """将 OpenAI 格式 messages 转为 Anthropic 格式。"""

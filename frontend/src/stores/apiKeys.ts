@@ -16,6 +16,8 @@ export const useApiKeyStore = defineStore(
 			modelId: "",
 			apiType: "",
 			contextWindow: 128000,
+			reasoningEffort: "",
+			thinkingBudget: null,
 		});
 
 		/** 建模者模型配置 */
@@ -25,6 +27,8 @@ export const useApiKeyStore = defineStore(
 			modelId: "",
 			apiType: "",
 			contextWindow: 128000,
+			reasoningEffort: "",
+			thinkingBudget: null,
 		});
 
 		/** 编码者模型配置 */
@@ -34,6 +38,8 @@ export const useApiKeyStore = defineStore(
 			modelId: "",
 			apiType: "",
 			contextWindow: 128000,
+			reasoningEffort: "",
+			thinkingBudget: null,
 		});
 
 		/** 写作者模型配置 */
@@ -43,6 +49,8 @@ export const useApiKeyStore = defineStore(
 			modelId: "",
 			apiType: "",
 			contextWindow: 128000,
+			reasoningEffort: "",
+			thinkingBudget: null,
 		});
 
 		/** OpenAlex 邮箱 */
@@ -103,6 +111,8 @@ export const useApiKeyStore = defineStore(
 				modelId: "",
 				apiType: "",
 				contextWindow: 128000,
+				reasoningEffort: "",
+				thinkingBudget: null,
 			};
 			modelerConfig.value = {
 				apiKey: "",
@@ -110,6 +120,8 @@ export const useApiKeyStore = defineStore(
 				modelId: "",
 				apiType: "",
 				contextWindow: 128000,
+				reasoningEffort: "",
+				thinkingBudget: null,
 			};
 			coderConfig.value = {
 				apiKey: "",
@@ -117,6 +129,8 @@ export const useApiKeyStore = defineStore(
 				modelId: "",
 				apiType: "",
 				contextWindow: 128000,
+				reasoningEffort: "",
+				thinkingBudget: null,
 			};
 			writerConfig.value = {
 				apiKey: "",
@@ -124,6 +138,8 @@ export const useApiKeyStore = defineStore(
 				modelId: "",
 				apiType: "",
 				contextWindow: 128000,
+				reasoningEffort: "",
+				thinkingBudget: null,
 			};
 			openalexEmail.value = "";
 		}

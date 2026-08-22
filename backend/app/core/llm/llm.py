@@ -12,6 +12,7 @@ from app.schemas.response import (
     CoordinatorMessage,
 )
 from app.services.redis_manager import redis_manager
+from app.config.setting import settings
 from app.schemas.enums import AgentType
 from app.config.setting import ApiType
 from app.core.llm.types import StandardResponse
@@ -36,6 +37,8 @@ class LLM:
         base_url: str | None = None,
         task_id: str = "",
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
+        thinking_budget: int | None = None,
     ):
         self.api_type = api_type
         self.api_key = api_key
@@ -43,6 +46,8 @@ class LLM:
         self.base_url = base_url
         self.chat_count = 0
         self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
+        self.thinking_budget = thinking_budget
         self.task_id = task_id
         self.provider = self._create_provider(api_type)
 
@@ -77,6 +82,11 @@ class LLM:
     ) -> StandardResponse:
         self._validate_config(agent_name)
 
+        # 重试上限：显式参数 > 全局配置 > 兜底值，避免 API 持续失败时无限重试
+        effective_max_retries = (
+            max_retries if max_retries is not None else (settings.MAX_RETRIES or 5)
+        )
+
         # 验证和修复工具调用完整性（仅对 OpenAI 格式的历史有效）
         if history:
             history = self._validate_and_fix_tool_calls(history)
@@ -95,6 +105,8 @@ class LLM:
                     tool_choice=tool_choice,
                     max_tokens=self.max_tokens,
                     top_p=top_p,
+                    reasoning_effort=self.reasoning_effort,
+                    thinking_budget=self.thinking_budget,
                 )
                 logger.info(f"API返回: content={response.content!r}, tool_calls={len(response.tool_calls)}")
                 self.chat_count += 1
@@ -103,7 +115,7 @@ class LLM:
             except Exception as e:
                 attempt += 1
                 logger.error(f"第{attempt}次重试: {str(e)}")
-                if max_retries is not None and attempt >= max_retries:
+                if attempt >= effective_max_retries:
                     raise
                 time.sleep(retry_delay * min(attempt, 10))
 
@@ -189,7 +201,8 @@ class LLM:
             case AgentType.COORDINATOR:
                 agent_msg = CoordinatorMessage(content=content)
             case _:
-                raise ValueError(f"不支持的agent类型: {agent_name}")
+                # 评审/预审等非流水线角色：降级为系统消息推送，不中断调用
+                agent_msg = SystemMessage(content=content)
 
         await redis_manager.publish_message(self.task_id, agent_msg)
 
