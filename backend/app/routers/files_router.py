@@ -4,7 +4,6 @@ from fastapi import APIRouter
 from app.utils.common_utils import get_current_files, get_work_dir
 import os
 import subprocess
-from icecream import ic  # type: ignore[import-unresolved]
 from fastapi import HTTPException
 
 router = APIRouter()
@@ -35,7 +34,6 @@ async def get_files(task_id: str):
 
 @router.get("/open_folder")
 async def open_folder(task_id: str):
-    ic(task_id)
     # 打开工作目录
     work_dir = get_work_dir(task_id)
 

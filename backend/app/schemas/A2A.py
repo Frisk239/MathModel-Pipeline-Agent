@@ -8,6 +8,7 @@ class CoordinatorToModeler(BaseModel):
     """协调者传递给建模手的数据结构。"""
     questions: dict
     ques_count: int
+    required_files: list[str] = []  # 题面声明所需附件（G1 数据门消费）
 
 
 class ModelerToCoder(BaseModel):

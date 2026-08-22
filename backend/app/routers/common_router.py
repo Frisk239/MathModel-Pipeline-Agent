@@ -65,11 +65,14 @@ async def root():
 async def config():
     return {
         "environment": settings.ENV,
-        "deepseek_model": settings.DEEPSEEK_MODEL,
-        "deepseek_base_url": settings.DEEPSEEK_BASE_URL,
         "max_chat_turns": settings.MAX_CHAT_TURNS,
         "max_retries": settings.MAX_RETRIES,
         "CORS_ALLOW_ORIGINS": settings.CORS_ALLOW_ORIGINS,
+        "hil": {
+            "autoMode": settings.AUTO_MODE,
+            "enabled": getattr(settings, "HIL_ENABLED", True),
+            **settings.HIL_CHECKPOINTS,
+        },
     }
 
 
@@ -93,8 +96,23 @@ async def track(task_id: str):
 
 
 @router.get("/status")
-async def get_service_status():
-    """获取后端和 Redis 的运行状态。"""
+async def get_service_status(task_id: str | None = None):
+    """获取服务健康状态；带 task_id 时返回该任务的持久化状态。"""
+    if task_id:
+        from app.core.task_state import TaskStateMachine
+        from app.utils.common_utils import get_work_dir
+
+        try:
+            work_dir = get_work_dir(task_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+        sm = TaskStateMachine.load(task_id, work_dir)
+        if sm is None:
+            return {"task_id": task_id, "phase": "unknown",
+                    "message": "任务存在但尚无状态记录（可能创建于状态机功能之前）"}
+        return sm.snapshot()
+
     status = {
         "backend": {"status": "running", "message": "Backend service is running"},
         "redis": {"status": "unknown", "message": "Redis connection status unknown"}
