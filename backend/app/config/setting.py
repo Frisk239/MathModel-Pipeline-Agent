@@ -126,6 +126,10 @@ class Settings(BaseSettings):
         "paper_review": True,    # ④ 终稿前
     }
 
+    # A/B 验证开关：质量门（G2 门循环/G3 修复回路/G4 终审）与三期 Agent 契约可整体关闭还原基线
+    QUALITY_GATES_ENABLED: bool = True
+    AGENT_CONTRACTS_ENABLED: bool = True
+
     model_config = SettingsConfigDict(
         env_file=".env.dev",
         env_file_encoding="utf-8",

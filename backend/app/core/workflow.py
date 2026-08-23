@@ -88,6 +88,14 @@ class MathModelWorkFlow(WorkFlow):
             self.state.transition(TaskPhase.WRITING, note="开始写作")
             self._writing_started = True
 
+        if not settings.QUALITY_GATES_ENABLED:
+            # A/B 基线：门关闭，不做任何检查（状态转移保持在短路之前）
+            return await writer_agent.run(
+                prompt,
+                available_images=available_images,
+                sub_title=sub_title,
+            )
+
         response = await writer_agent.run(
             prompt,
             available_images=available_images,
@@ -516,7 +524,7 @@ class MathModelWorkFlow(WorkFlow):
             )
             nb_path = _os.path.join(self.work_dir, "notebook.ipynb")
             g2_prior_items: list[str] | None = None
-            while True:
+            while settings.QUALITY_GATES_ENABLED:
                 l1_items = check_notebook_artifacts(
                     nb_path, self.work_dir, coder_response.created_images
                 )
@@ -651,7 +659,7 @@ class MathModelWorkFlow(WorkFlow):
         user_output.save_result()
 
         res_md = Path(self.work_dir) / "res.md"
-        if res_md.exists():
+        if res_md.exists() and settings.QUALITY_GATES_ENABLED:
             citation_report = check_citation_integrity(
                 res_md.read_text(encoding="utf-8")
             )
@@ -665,7 +673,11 @@ class MathModelWorkFlow(WorkFlow):
                     ),
                 )
 
-        # G4 终审（七维评审 + 机械裁决 + 判官披露）
+        # G4 终审（七维评审 + 机械裁决 + 判官披露）；A/B 基线时跳过
+        if not settings.QUALITY_GATES_ENABLED:
+            self.state.transition(TaskPhase.COMPLETED, note="A/B 基线：门关闭，直接完成")
+            self._write_verify_report()
+            return
         self.state.transition(TaskPhase.FINAL_REVIEW, note="G4 终审")
         same_family = (
             settings.REVIEW_MODEL is None or settings.REVIEW_MODEL == settings.COORDINATOR_MODEL
@@ -750,7 +762,21 @@ class MathModelWorkFlow(WorkFlow):
             )
 
         self.state.transition(TaskPhase.COMPLETED, note="流程完成")
-        self._append_limitations(list(leftover_items) + self.g2_leftover_items)
+        # G2 遗留在写入前按终态复核：L1 重跑剔除已修复项（耗尽时快照可能已过时）
+        g2_leftover_final = list(self.g2_leftover_items)
+        if g2_leftover_final:
+            l1_still = {
+                it.problem
+                for it in check_notebook_artifacts(
+                    _os.path.join(self.work_dir, "notebook.ipynb"), self.work_dir, None
+                )
+            }
+            g2_leftover_final = [
+                it
+                for it in g2_leftover_final
+                if "notebook" not in it.problem[:8] or any(frag in it.problem for frag in l1_still)
+            ]
+        self._append_limitations(list(leftover_items) + g2_leftover_final)
         self._write_verify_report()
         # 局限性追加后重转 docx 保持一致
         if leftover_items:
