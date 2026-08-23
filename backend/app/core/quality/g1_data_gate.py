@@ -29,12 +29,22 @@ def extract_required_from_problem(ques_all: str) -> list[str]:
     匹配 "附件1/附件 1/附件一/Attachment 1/appendix1" 等变体。
     """
     normalized = unicodedata.normalize("NFKC", ques_all)
-    found = re.findall(r"(?:附件|attachment|appendix)\s*[0-9０-９一二三四五六七八九十]+", normalized, re.IGNORECASE)
+    # 模板类附件（须提交结果的模板文件）是可选输入，不列入必需清单：
+    # 匹配附件名后 20 字符的上下文，含模板特征词则跳过
+    _TEMPLATE_CTX = ("result", "模板", "template", "提交结果")
+    pat = re.compile(
+        r"((?:附件|attachment|appendix)\s*[0-9０-９一二三四五六七八九十]+)", re.IGNORECASE
+    )
     seen: list[str] = []
-    for f in found:
-        key = _normalize_for_match(f)
-        if key not in seen:
-            seen.append(key)
+    for m in pat.finditer(normalized):
+        name = m.group(1)
+        key = _normalize_for_match(name)
+        if key in seen:
+            continue
+        context = normalized[m.end() : m.end() + 20].lower()
+        if any(t in context for t in _TEMPLATE_CTX):
+            continue
+        seen.append(key)
     return seen
 
 
@@ -73,7 +83,15 @@ def check_data_completeness(
             for m in re.finditer(r"(?:附件|attachment|appendix)(\d+)", norm_name)
         }
 
+    # 模板类附件（结果模板/提交模板）是可选输入，缺失不阻断——只记录提示
+    TEMPLATE_MARKERS = ("result", "模板", "template", "提交结果")
+
+    def _is_template(name: str) -> bool:
+        n = _normalize_for_match(name)
+        return any(m in n for m in TEMPLATE_MARKERS)
+
     missing: list[str] = []
+    template_missing: list[str] = []
     for required in required_files:
         norm = _normalize_for_match(required)
         req_nums = _required_numbers(norm)
@@ -81,13 +99,17 @@ def check_data_completeness(
             norm in e or e in norm for e in existing_norm if abs(len(e) - len(norm)) < 40
         )
         if not hit:
-            missing.append(required)
+            if _is_template(required):
+                template_missing.append(required)
+            else:
+                missing.append(required)
 
     if not missing:
         return GateReport(
             gate=GateName.G1,
             verdict=GateVerdict.PASS,
-            summary=f"题面声明的 {len(required_files)} 项附件全部就位",
+            summary=f"题面声明的 {len(required_files)} 项附件全部就位"
+            + (f"（模板类 {len(template_missing)} 项可选未传）" if template_missing else ""),
         )
 
     items = [

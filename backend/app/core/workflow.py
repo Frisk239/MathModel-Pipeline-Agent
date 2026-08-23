@@ -266,6 +266,7 @@ class MathModelWorkFlow(WorkFlow):
         self.work_dir = create_work_dir(self.task_id)
         self.state = TaskStateMachine(self.task_id, self.work_dir)
         self.gate_reports = []
+        self.g1_leftover_items = []
         self.g2_leftover_items = []
         self._writing_started = False
         try:
@@ -334,12 +335,45 @@ class MathModelWorkFlow(WorkFlow):
         g1_report = check_data_completeness(required, self.work_dir)
         self.gate_reports.append(g1_report)
         if g1_report.verdict.value == "material":
-            self.state.fail(f"G1 {g1_report.summary}")
-            self._write_verify_report()
-            await redis_manager.publish_message(
-                self.task_id, SystemMessage(content=g1_report.summary, type="error")
-            )
-            raise ValueError(f"G1 数据完备性门未通过：{g1_report.summary}")
+            # 数据缺失只有人能判断：漏传（应终止补传）还是模板类误报（应继续）——挂起人工确认
+            if settings.AUTO_MODE:
+                self.state.record_auto_degrade("g1", g1_report.summary)
+                self.g1_leftover_items.extend(g1_report.items)
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content=f"G1（全自动降级）：{g1_report.summary}", type="warning"
+                    ),
+                )
+            else:
+                await redis_manager.publish_message(
+                    self.task_id, SystemMessage(content=g1_report.summary, type="error")
+                )
+                g1_decision = await wait_for_approval(
+                    self.task_id,
+                    self.state,
+                    "g1_missing",
+                    {
+                        "title": "G1 数据完备性检查未通过，需人工确认",
+                        "report": g1_report.summary,
+                        "roadmap": "; ".join(
+                            it.problem for it in g1_report.items
+                        ),
+                        "options": ["approve", "revise", "reject"],
+                        "hint": "批准=按缺失继续（模板类误报）；否决=终止任务补传附件",
+                    },
+                )
+                if g1_decision.action == "reject":
+                    self.state.fail(f"G1 人工终止：{g1_report.summary}")
+                    self._write_verify_report()
+                    raise ValueError(
+                        f"G1 数据完备性门未通过（人工终止）：{g1_report.summary}"
+                    )
+                # approve：人工确认继续（决策在案）
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content="G1 人工确认：按现状继续", type="success"),
+                )
         self.state.transition(TaskPhase.MODELING, note="数据完备，进入建模")
 
         # 检查点①：拆题结果人工审批
@@ -795,7 +829,7 @@ class MathModelWorkFlow(WorkFlow):
                 for it in g2_leftover_final
                 if "notebook" not in it.problem[:8] or any(frag in it.problem for frag in l1_still)
             ]
-        self._append_limitations(list(leftover_items) + g2_leftover_final)
+        self._append_limitations(list(leftover_items) + self.g1_leftover_items + g2_leftover_final)
         self._write_verify_report()
         # 局限性追加后重转 docx 保持一致
         if leftover_items:
