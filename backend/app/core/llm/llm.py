@@ -117,7 +117,20 @@ class LLM:
                 logger.error(f"第{attempt}次重试: {str(e)}")
                 if attempt >= effective_max_retries:
                     raise
-                time.sleep(retry_delay * min(attempt, 10))
+                err_msg = str(e)
+                is_conn_error = (
+                    "Connection error" in err_msg
+                    or "Connection refused" in err_msg
+                    or "timeout" in err_msg.lower()
+                    or "APITimeoutError" in err_msg
+                )
+                if is_conn_error:
+                    # 网络/上游瞬断：指数退避（5s→15s→30s→60s），等待恢复而非快速烧完重试
+                    wait = min(5 * (3 ** (attempt - 1)), 60)
+                    logger.warning(f"连接类错误，退避 {wait}s 后重试")
+                    time.sleep(wait)
+                else:
+                    time.sleep(retry_delay * min(attempt, 10))
 
     def _validate_and_fix_tool_calls(self, history: list) -> list:
         """验证并修复工具调用完整性。"""

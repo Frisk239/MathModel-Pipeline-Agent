@@ -31,6 +31,39 @@ DEMO_MARKERS: tuple[str, ...] = (
     "受数据获取条件限制",
 )
 
+def extract_notebook_outputs(notebook: dict, max_chars: int = 12000) -> str:
+    """提取 notebook 全部执行输出的纯文本（display_data 的 ansi2html 行列表 → 纯文本）。
+
+    供 G2-L2 评审对照"报告的数值是否有执行输出支撑"。
+    """
+    import re as _re
+
+    parts: list[str] = []
+    for idx, cell in enumerate(notebook.get("cells", [])):
+        if cell.get("cell_type") != "code":
+            continue
+        for out in cell.get("outputs", []):
+            if out.get("output_type") == "error":
+                continue  # 报错由 L1 负责
+            data = out.get("data", {})
+            html = data.get("text/html")
+            if isinstance(html, list):
+                text = "".join(html)
+            elif isinstance(html, str):
+                text = html
+            else:
+                text = str(data.get("text/plain", ""))
+            # 剥样式块与 HTML 标签留文本
+            text = _re.sub(r"<style.*?</style>", "", text, flags=_re.S)
+            text = _re.sub(r"<[^>]+>", "", text)
+            text = text.strip()
+            if text:
+                parts.append(f"[cell {idx}] {text[:2000]}")
+        if sum(len(p) for p in parts) > max_chars:
+            break
+    return "\n".join(parts)[:max_chars]
+
+
 G2_L2_CHECKLIST = """你是一名严格的数据科学代码评审。对以下数学建模任务的代码产物做定向审查，只查这四类问题，每类逐条给出结论：
 
 1. data_leakage（数据泄漏）：是否使用预测目标日之后/当天完整数据做训练、标定或特征构造（如用 7月22日全天数据预测 7月22日）；
@@ -159,8 +192,10 @@ async def run_g2_ai_review(
             for c in nb.get("cells", [])
             if c.get("cell_type") == "code"
         )[:20000]
+        outputs_text = extract_notebook_outputs(nb)
     except (OSError, json.JSONDecodeError):
         code_src = "(notebook 不可读)"
+        outputs_text = ""
 
     focus_note = ""
     if prior_items:
@@ -175,7 +210,8 @@ async def run_g2_ai_review(
         f"{G2_L2_CHECKLIST}{focus_note}\n\n【题目】\n{problem_text[:2000]}\n\n"
         f"【建模方案】\n{model_plan[:3000]}\n\n"
         f"【代码手执行总结】\n{coder_summary[:3000]}\n\n"
-        f"【notebook 源码】\n{code_src}"
+        f"【notebook 源码】\n{code_src}\n\n"
+        f"【notebook 执行输出】\n{outputs_text or '(无输出)'}"
     )
 
     try:

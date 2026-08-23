@@ -9,10 +9,10 @@ class TestCommonUtils(unittest.TestCase):
     """测试 common_utils 模块的核心函数。"""
 
     def test_split_footnotes(self):
-        """测试脚注分离功能。"""
+        """测试脚注分离：正文保留内联 [^N] 标记（Markdown 脚注链接所需），仅剥离底部定义行。"""
         text = "Example[^1]\n\n[^1]: Footnote content"
         main, notes = split_footnotes(text)
-        self.assertEqual(main, "Example")
+        self.assertEqual(main, "Example[^1]")
         self.assertEqual(notes, [("1", "Footnote content")])
 
 

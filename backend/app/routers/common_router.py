@@ -88,6 +88,35 @@ async def get_task_messages(task_id: str):
     return await _load_task_messages_from_file(task_id)
 
 
+@router.get("/tasks")
+async def list_tasks():
+    """任务历史列表（扫描 work_dir 的 task_state.json 汇总）。"""
+    from app.core.task_state import TaskStateMachine
+
+    result = []
+    work_root = Path("project/work_dir")
+    if work_root.is_dir():
+        for d in sorted(work_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            state_file = d / "task_state.json"
+            if not state_file.is_file():
+                continue
+            sm = TaskStateMachine.load(d.name, str(d))
+            if sm is None:
+                continue
+            last = sm.transitions[-1]["at"] if sm.transitions else 0
+            result.append(
+                {
+                    "task_id": d.name,
+                    "phase": sm.phase.value,
+                    "is_terminal": sm.phase.value in ("completed", "failed", "cancelled"),
+                    "fail_reason": sm.fail_reason[:120] if sm.fail_reason else "",
+                    "updated_at": last,
+                    "repair_rounds": sm.repair_rounds,
+                }
+            )
+    return {"tasks": result[:50]}
+
+
 @router.get("/track")
 async def track(task_id: str):
     # 获取任务的token使用情况

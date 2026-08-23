@@ -19,6 +19,32 @@ async def lifespan(app: FastAPI):
     PROJECT_FOLDER = "./project"
     os.makedirs(PROJECT_FOLDER, exist_ok=True)
 
+    # 启动时扫描非终态任务并标记 stale（进程中断的任务状态不再误导查询）
+    from app.core.task_state import TaskPhase, TaskStateMachine
+
+    stale = 0
+    work_root = os.path.join(PROJECT_FOLDER, "work_dir")
+    if os.path.isdir(work_root):
+        for name in os.listdir(work_root):
+            state_file = os.path.join(work_root, name, "task_state.json")
+            if not os.path.isfile(state_file):
+                continue
+            sm = TaskStateMachine.load(name, os.path.join(work_root, name))
+            if sm and sm.phase not in (
+                TaskPhase.COMPLETED,
+                TaskPhase.FAILED,
+                TaskPhase.CANCELLED,
+            ):
+                try:
+                    sm.fail("进程中断（后端重启时任务不在运行，已标记 stale）")
+                    sm.transitions[-1]["note"] = "stale: 进程中断"
+                    sm.save()
+                    stale += 1
+                except Exception as e:
+                    logger.warning(f"stale 标记失败 {name}: {e}")
+    if stale:
+        logger.warning(f"启动扫描：{stale} 个非终态任务已标记为 stale")
+
     yield
     logger.info("Stopping MathModelAgent")
 

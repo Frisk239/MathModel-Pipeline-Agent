@@ -44,7 +44,7 @@ ALLOWED_TRANSITIONS: dict[TaskPhase, set[TaskPhase]] = {
     TaskPhase.WRITING: {TaskPhase.ASSEMBLING, TaskPhase.FAILED, TaskPhase.CANCELLED},
     TaskPhase.ASSEMBLING: {TaskPhase.FINAL_REVIEW, TaskPhase.COMPLETED, TaskPhase.FAILED, TaskPhase.CANCELLED},
     TaskPhase.FINAL_REVIEW: {TaskPhase.COMPLETED, TaskPhase.WRITING, TaskPhase.FAILED, TaskPhase.CANCELLED},
-    TaskPhase.AWAITING_DECISION: set(),  # 二期启用：经审批决策后回到原检查点阶段
+    TaskPhase.AWAITING_DECISION: {TaskPhase.FAILED, TaskPhase.CANCELLED},  # 挂起态仅允许终止类转移（恢复走 resolve_checkpoint 专用通道）
     TaskPhase.COMPLETED: set(),
     TaskPhase.FAILED: set(),
     TaskPhase.CANCELLED: set(),
@@ -158,6 +158,18 @@ class TaskStateMachine:
         self.phase = original
         self.save()
         return record
+
+    def record_auto_degrade(self, gate: str, note: str) -> None:
+        """AUTO_MODE 下门耗尽的自动降级记录（与人工决策区分审计）。"""
+        self.override_history.append(
+            {
+                "checkpoint": f"{gate}_exhausted",
+                "action": "auto_degraded",
+                "feedback": note[:300],
+                "at": int(time.time()),
+            }
+        )
+        self.save()
 
     def friction_warning(self) -> str | None:
         """摩擦升级提示：同一检查点第 2 次 revise 无意见时给出警告文案。"""

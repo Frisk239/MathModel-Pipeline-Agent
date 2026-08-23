@@ -121,6 +121,11 @@ class MathModelWorkFlow(WorkFlow):
             try:
                 round_no = self.state.request_repair("g3")
             except Exception:
+                if settings.AUTO_MODE:
+                    self.state.record_auto_degrade(
+                        "g3", f"({sub_title}) {report.summary}"
+                    )
+                    return response
                 await redis_manager.publish_message(
                     self.task_id,
                     SystemMessage(
@@ -547,9 +552,23 @@ class MathModelWorkFlow(WorkFlow):
                     f"- {it.problem}（验收：{it.acceptance_criteria}）"
                     for it in g2_report.items
                 )
+                # 报错 cell 类问题给出定向清理指令（重跑全任务不会清掉旧 cell）
+                if any("报错输出" in it.problem or "notebook cell" in it.problem for it in g2_report.items):
+                    roadmap_text += (
+                        "\n\n【报错 cell 专项指令】以上报错 cell 必须逐个处理："
+                        "定位对应 cell，修复其代码或直接删除该 cell 后重跑，"
+                        "禁止保留报错的历史尝试 cell；其余已成功的代码保持不变。"
+                    )
                 try:
                     round_no = self.state.request_repair("g2")
                 except Exception:
+                    if settings.AUTO_MODE:
+                        # 全自动模式：耗尽自动降级放行（遗留如实记录，与人工决策区分审计）
+                        self.state.record_auto_degrade(
+                            "g2", f"({key}) {g2_report.summary}"
+                        )
+                        self.g2_leftover_items.extend(g2_report.items)
+                        break
                     # 轮次耗尽 → 人工三选一（决策记录在案）
                     # 动作词表与检查点统一：approve=放行 / revise=带意见追加轮 / reject=中止
                     decision = await wait_for_approval(
