@@ -297,6 +297,39 @@ async def run_g2_ai_review(
     )
 
 
+def format_repair_roadmap(items: list[RoadmapItem]) -> str:
+    """v3/P2-4：把门条目组装成分级聚焦的修复指令。
+
+    实证（F1/F4）：四类问题平铺给 Coder，模型顺序修并被 minor/清洗类
+    缠住，修复预算（≤3 轮）被稀释。改为 critical→major→minor 排序 +
+    显式标注必须解决范围，minor 明示可延后。
+    """
+    sev_rank = {Severity.CRITICAL: 0, Severity.MAJOR: 1, Severity.MINOR: 2}
+    ordered = sorted(items, key=lambda it: sev_rank.get(it.severity, 3))
+    must = [it for it in ordered if it.severity != Severity.MINOR]
+    minor = [it for it in ordered if it.severity == Severity.MINOR]
+
+    blocks: list[str] = []
+    if must:
+        blocks.append(
+            "【本轮必须解决（critical/major）】\n"
+            + "\n".join(
+                f"- [{it.severity.value}] {it.problem}（验收：{it.acceptance_criteria}）"
+                for it in must
+            )
+        )
+    if minor:
+        blocks.append(
+            "【可延后（minor，主链路跑通后有余力再处理）】\n"
+            + "\n".join(f"- {it.problem}" for it in minor)
+        )
+    blocks.append(
+        "【修复优先级】先解决上述 critical/major 条目并跑通主链路"
+        "（建模→求解→结果文件写出）；minor 条目不得挤占主链路修复预算。"
+    )
+    return "\n\n".join(blocks)
+
+
 def combine_g2(l1_items: list[RoadmapItem], l2_report: GateReport | None) -> GateReport:
     """合并 L1/L2 为单一门判定。"""
     items = list(l1_items)

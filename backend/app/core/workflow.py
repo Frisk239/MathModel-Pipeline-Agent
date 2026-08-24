@@ -27,6 +27,7 @@ from app.config.setting import settings
 from app.core.quality.g2_code_gate import (
     check_notebook_artifacts,
     combine_g2,
+    format_repair_roadmap,
     run_g2_ai_review,
 )
 from app.core.quality.g4_final_review import run_g4_final_review, run_g4_recheck
@@ -598,10 +599,8 @@ class MathModelWorkFlow(WorkFlow):
                 if g2_report.verdict.value != "material":
                     break
 
-                roadmap_text = "\n".join(
-                    f"- {it.problem}（验收：{it.acceptance_criteria}）"
-                    for it in g2_report.items
-                )
+                # v3/P2-4：分级聚焦的修复指令（critical/major 必须解决，minor 明示延后）
+                roadmap_text = format_repair_roadmap(g2_report.items)
                 # 报错 cell 类问题给出定向清理指令（重跑全任务不会清掉旧 cell）
                 if any("报错输出" in it.problem or "notebook cell" in it.problem for it in g2_report.items):
                     roadmap_text += (
