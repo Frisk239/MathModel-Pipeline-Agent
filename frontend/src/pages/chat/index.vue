@@ -10,15 +10,13 @@ import {
 	SidebarProvider,
 	SidebarTrigger,
 } from "@/components/ui/sidebar";
+import ApiDialog from "@/pages/chat/components/ApiDialog.vue";
 import MoreDetail from "@/pages/chat/components/MoreDetail.vue";
-import { AppWindow, CircleEllipsis } from "lucide-vue-next";
+import { AppWindow, CircleEllipsis, Settings2 } from "lucide-vue-next";
 import { onMounted, ref } from "vue";
 
-// ---- Reactive State ----
-
 const isMoreDetailOpen = ref(false);
-
-// ---- Lifecycle Hooks ----
+const isApiDialogOpen = ref(false);
 
 onMounted(() => {
 	getHelloWorld().then((res) => {
@@ -28,46 +26,35 @@ onMounted(() => {
 </script>
 
 <template>
-
-  <SidebarProvider>
+  <SidebarProvider :default-open="false">
     <MoreDetail v-model="isMoreDetailOpen" />
-    <AppSidebar />
+    <ApiDialog v-model:open="isApiDialogOpen" />
+    <AppSidebar collapsible="icon" />
     <SidebarInset>
-      <header class="flex h-16 shrink-0 items-center gap-2 px-4">
+      <header class="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5">
         <SidebarTrigger class="-ml-1" />
-        <div class="flex justify-between w-full gap-2">
-          <ServiceStatus />
-          <div class="flex gap-2">
-            <Button variant="outline" @click="isMoreDetailOpen = true">
-              <CircleEllipsis />
-              更多
+        <ServiceStatus />
+        <div class="ml-auto flex items-center gap-1 sm:gap-2">
+          <Button variant="outline" size="sm" @click="isApiDialogOpen = true">
+            <Settings2 />
+            <span class="hidden sm:inline">配置</span>
+          </Button>
+          <Button variant="outline" size="sm" @click="isMoreDetailOpen = true">
+            <CircleEllipsis />
+            <span class="hidden sm:inline">更多</span>
+          </Button>
+          <a href="https://www.mathmodel.top/" target="_blank">
+            <Button variant="outline" size="sm">
+              <AppWindow />
+              <span class="hidden sm:inline">官网</span>
             </Button>
-            <a href="https://www.mathmodel.top/" target="_blank">
-              <Button variant="outline">
-                <AppWindow />
-                官网
-              </Button>
-            </a>
-          </div>
+          </a>
         </div>
       </header>
 
-      <div class="py-5 px-4">
-        <div class="space-y-6">
-          <div class="text-center space-y-2 mb-10">
-            <h1 class="text-2xl font-semibold">MathModelAgent</h1>
-            <p class="text-muted-foreground">
-              让 Agent 数学建模，代码编写，论文写作
-            </p>
-          </div>
-
-          <UserStepper>
-          </UserStepper>
-          <div class="text-center text-xs text-muted-foreground mt-8">
-            项目处于内测阶段，欢迎进群反馈
-          </div>
-          <ModelingExamples />
-        </div>
+      <div class="flex-1 overflow-y-auto px-4 py-4">
+        <UserStepper />
+        <ModelingExamples />
       </div>
     </SidebarInset>
   </SidebarProvider>
