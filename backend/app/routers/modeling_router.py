@@ -87,6 +87,9 @@ async def save_api_config(request: SaveApiConfigRequest):
             settings.COORDINATOR_THINKING_BUDGET = (
                 int(tb) if (tb := request.coordinator.get("thinkingBudget")) else None
             )
+            settings.COORDINATOR_MODELS = (
+                request.coordinator.get("fallbackModels") or None
+            )
 
         if request.modeler:
             settings.MODELER_API_KEY = request.modeler.get("apiKey", "")
@@ -102,6 +105,7 @@ async def save_api_config(request: SaveApiConfigRequest):
             settings.MODELER_THINKING_BUDGET = (
                 int(tb) if (tb := request.modeler.get("thinkingBudget")) else None
             )
+            settings.MODELER_MODELS = request.modeler.get("fallbackModels") or None
 
         if request.coder:
             settings.CODER_API_KEY = request.coder.get("apiKey", "")
@@ -117,6 +121,7 @@ async def save_api_config(request: SaveApiConfigRequest):
             settings.CODER_THINKING_BUDGET = (
                 int(tb) if (tb := request.coder.get("thinkingBudget")) else None
             )
+            settings.CODER_MODELS = request.coder.get("fallbackModels") or None
 
         if request.writer:
             settings.WRITER_API_KEY = request.writer.get("apiKey", "")
@@ -132,6 +137,7 @@ async def save_api_config(request: SaveApiConfigRequest):
             settings.WRITER_THINKING_BUDGET = (
                 int(tb) if (tb := request.writer.get("thinkingBudget")) else None
             )
+            settings.WRITER_MODELS = request.writer.get("fallbackModels") or None
 
         if request.openalex_email:
             settings.OPENALEX_EMAIL = request.openalex_email

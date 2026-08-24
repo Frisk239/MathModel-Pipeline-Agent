@@ -38,6 +38,23 @@ def _empty_to_none(v):
     return v
 
 
+def resolve_model_chain(primary: str | None, extras: str | None) -> list[str]:
+    """Build a failover chain: primary first, then comma-separated extras.
+
+    Strips whitespace, drops empties, de-duplicates while preserving order.
+    Empty extras → ``[primary]`` (or ``[]`` if primary is also empty).
+    """
+    chain: list[str] = []
+    seen: set[str] = set()
+    for raw in (primary, *(extras or "").split(",")):
+        name = (raw or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        chain.append(name)
+    return chain
+
+
 OptionalInt = Annotated[Optional[int], BeforeValidator(_empty_to_none)]
 
 
@@ -48,6 +65,7 @@ class Settings(BaseSettings):
     COORDINATOR_API_TYPE: Optional[ApiType] = None
     COORDINATOR_API_KEY: Optional[str] = None
     COORDINATOR_MODEL: Optional[str] = None
+    COORDINATOR_MODELS: Optional[str] = None  # comma-separated extras
     COORDINATOR_BASE_URL: Optional[str] = None
     COORDINATOR_MAX_TOKENS: OptionalInt = None
     COORDINATOR_CONTEXT_WINDOW: int = 128000
@@ -57,6 +75,7 @@ class Settings(BaseSettings):
     MODELER_API_TYPE: Optional[ApiType] = None
     MODELER_API_KEY: Optional[str] = None
     MODELER_MODEL: Optional[str] = None
+    MODELER_MODELS: Optional[str] = None  # comma-separated extras
     MODELER_BASE_URL: Optional[str] = None
     MODELER_MAX_TOKENS: OptionalInt = None
     MODELER_CONTEXT_WINDOW: int = 128000
@@ -66,6 +85,7 @@ class Settings(BaseSettings):
     CODER_API_TYPE: Optional[ApiType] = None
     CODER_API_KEY: Optional[str] = None
     CODER_MODEL: Optional[str] = None
+    CODER_MODELS: Optional[str] = None  # comma-separated extras
     CODER_BASE_URL: Optional[str] = None
     CODER_MAX_TOKENS: OptionalInt = None
     CODER_CONTEXT_WINDOW: int = 128000
@@ -75,6 +95,7 @@ class Settings(BaseSettings):
     WRITER_API_TYPE: Optional[ApiType] = None
     WRITER_API_KEY: Optional[str] = None
     WRITER_MODEL: Optional[str] = None
+    WRITER_MODELS: Optional[str] = None  # comma-separated extras
     WRITER_BASE_URL: Optional[str] = None
     WRITER_MAX_TOKENS: OptionalInt = None
     WRITER_CONTEXT_WINDOW: int = 128000
@@ -85,6 +106,7 @@ class Settings(BaseSettings):
     REVIEW_API_TYPE: Optional[ApiType] = None
     REVIEW_API_KEY: Optional[str] = None
     REVIEW_MODEL: Optional[str] = None
+    REVIEW_MODELS: Optional[str] = None  # comma-separated extras
     REVIEW_BASE_URL: Optional[str] = None
     REVIEW_MAX_TOKENS: OptionalInt = None
 
@@ -94,6 +116,7 @@ class Settings(BaseSettings):
 
     MAX_CHAT_TURNS: Optional[int] = None
     MAX_RETRIES: Optional[int] = None
+    LLM_READ_TIMEOUT: float = 180.0  # seconds; stream idle gap (zen hold)
     E2B_API_KEY: Optional[str] = None
     LOG_LEVEL: str = "DEBUG"
     DEBUG: bool = True

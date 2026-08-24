@@ -61,6 +61,7 @@ interface AgentFormConfig {
 	contextWindow: number;
 	reasoningEffort: string;
 	thinkingBudget: number | null;
+	fallbackModels: string;
 }
 
 /** Agent 键名 */
@@ -82,6 +83,7 @@ const form = ref<{
 		contextWindow: 128000,
 		reasoningEffort: "",
 		thinkingBudget: null,
+		fallbackModels: "",
 	},
 	modeler: {
 		apiKey: "",
@@ -91,6 +93,7 @@ const form = ref<{
 		contextWindow: 128000,
 		reasoningEffort: "",
 		thinkingBudget: null,
+		fallbackModels: "",
 	},
 	coder: {
 		apiKey: "",
@@ -100,6 +103,7 @@ const form = ref<{
 		contextWindow: 128000,
 		reasoningEffort: "",
 		thinkingBudget: null,
+		fallbackModels: "",
 	},
 	writer: {
 		apiKey: "",
@@ -109,6 +113,7 @@ const form = ref<{
 		contextWindow: 128000,
 		reasoningEffort: "",
 		thinkingBudget: null,
+		fallbackModels: "",
 	},
 	openalex_email: "",
 });
@@ -283,6 +288,7 @@ const fromStoreConfig = (config: ModelConfig): AgentFormConfig => ({
 	contextWindow: config.contextWindow ?? 128000,
 	reasoningEffort: config.reasoningEffort ?? "",
 	thinkingBudget: config.thinkingBudget ?? null,
+	fallbackModels: config.fallbackModels ?? "",
 });
 
 const loadFromStore = () => {
@@ -444,6 +450,7 @@ const resetAll = () => {
 			contextWindow: 128000,
 			reasoningEffort: "",
 			thinkingBudget: null,
+			fallbackModels: "",
 		},
 		modeler: {
 			apiKey: "",
@@ -453,6 +460,7 @@ const resetAll = () => {
 			contextWindow: 128000,
 			reasoningEffort: "",
 			thinkingBudget: null,
+			fallbackModels: "",
 		},
 		coder: {
 			apiKey: "",
@@ -462,6 +470,7 @@ const resetAll = () => {
 			contextWindow: 128000,
 			reasoningEffort: "",
 			thinkingBudget: null,
+			fallbackModels: "",
 		},
 		writer: {
 			apiKey: "",
@@ -471,6 +480,7 @@ const resetAll = () => {
 			contextWindow: 128000,
 			reasoningEffort: "",
 			thinkingBudget: null,
+			fallbackModels: "",
 		},
 		openalex_email: "",
 	};
@@ -545,6 +555,12 @@ const resetAll = () => {
                 <option v-for="m in detectedModels[config.key] ?? []" :key="m" :value="m" />
               </datalist>
             </div>
+          </div>
+
+          <div class="space-y-1">
+            <Label :for="`${config.key}-fallback-models`" class="text-xs text-muted-foreground">备用模型</Label>
+            <Input :id="`${config.key}-fallback-models`" v-model.trim="(form as any)[config.key].fallbackModels"
+              placeholder="model-b, model-c" class="h-7 text-xs" />
           </div>
 
           <div class="grid grid-cols-2 gap-2">

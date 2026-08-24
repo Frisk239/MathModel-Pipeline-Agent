@@ -18,6 +18,7 @@ export const useApiKeyStore = defineStore(
 			contextWindow: 128000,
 			reasoningEffort: "",
 			thinkingBudget: null,
+			fallbackModels: "",
 		});
 
 		/** 建模者模型配置 */
@@ -29,6 +30,7 @@ export const useApiKeyStore = defineStore(
 			contextWindow: 128000,
 			reasoningEffort: "",
 			thinkingBudget: null,
+			fallbackModels: "",
 		});
 
 		/** 编码者模型配置 */
@@ -40,6 +42,7 @@ export const useApiKeyStore = defineStore(
 			contextWindow: 128000,
 			reasoningEffort: "",
 			thinkingBudget: null,
+			fallbackModels: "",
 		});
 
 		/** 写作者模型配置 */
@@ -51,6 +54,7 @@ export const useApiKeyStore = defineStore(
 			contextWindow: 128000,
 			reasoningEffort: "",
 			thinkingBudget: null,
+			fallbackModels: "",
 		});
 
 		/** OpenAlex 邮箱 */
@@ -113,6 +117,7 @@ export const useApiKeyStore = defineStore(
 				contextWindow: 128000,
 				reasoningEffort: "",
 				thinkingBudget: null,
+				fallbackModels: "",
 			};
 			modelerConfig.value = {
 				apiKey: "",
@@ -122,6 +127,7 @@ export const useApiKeyStore = defineStore(
 				contextWindow: 128000,
 				reasoningEffort: "",
 				thinkingBudget: null,
+				fallbackModels: "",
 			};
 			coderConfig.value = {
 				apiKey: "",
@@ -131,6 +137,7 @@ export const useApiKeyStore = defineStore(
 				contextWindow: 128000,
 				reasoningEffort: "",
 				thinkingBudget: null,
+				fallbackModels: "",
 			};
 			writerConfig.value = {
 				apiKey: "",
@@ -140,6 +147,7 @@ export const useApiKeyStore = defineStore(
 				contextWindow: 128000,
 				reasoningEffort: "",
 				thinkingBudget: null,
+				fallbackModels: "",
 			};
 			openalexEmail.value = "";
 		}

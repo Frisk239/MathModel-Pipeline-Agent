@@ -1,7 +1,11 @@
 """OpenAI Responses API Provider。"""
 
 from openai import AsyncOpenAI, BadRequestError
-from app.core.llm.providers.base import BaseProvider, HTTP_USER_AGENT
+from app.core.llm.providers.base import (
+    BaseProvider,
+    HTTP_USER_AGENT,
+    llm_http_timeout,
+)
 from app.core.llm.types import StandardResponse, ToolCall, Usage
 
 
@@ -26,6 +30,7 @@ class OpenAIResponsesProvider(BaseProvider):
             api_key=api_key,
             base_url=base_url,
             default_headers={"User-Agent": HTTP_USER_AGENT},
+            timeout=llm_http_timeout(),
         )
 
         input_items = self._messages_to_input(messages)

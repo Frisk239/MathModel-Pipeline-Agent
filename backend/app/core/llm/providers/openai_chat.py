@@ -1,7 +1,11 @@
 """OpenAI Chat Completions API Provider（流式聚合）。"""
 
 from openai import AsyncOpenAI, BadRequestError
-from app.core.llm.providers.base import BaseProvider, HTTP_USER_AGENT
+from app.core.llm.providers.base import (
+    BaseProvider,
+    HTTP_USER_AGENT,
+    llm_http_timeout,
+)
 from app.core.llm.types import StandardResponse, ToolCall, Usage
 
 
@@ -31,6 +35,7 @@ class OpenAIChatProvider(BaseProvider):
             api_key=api_key,
             base_url=base_url,
             default_headers={"User-Agent": HTTP_USER_AGENT},
+            timeout=llm_http_timeout(),
         )
 
         kwargs: dict = {"model": model, "messages": messages, "stream": True}

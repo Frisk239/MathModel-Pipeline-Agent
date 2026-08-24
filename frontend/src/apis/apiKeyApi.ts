@@ -23,6 +23,7 @@ export interface AgentConfigPayload {
 	contextWindow?: number;
 	reasoningEffort?: string;
 	thinkingBudget?: number | null;
+	fallbackModels?: string;
 }
 
 /** 人工检查点配置 */

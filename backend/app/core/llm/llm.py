@@ -3,6 +3,7 @@
 from typing import Any
 from app.utils.common_utils import transform_link, split_footnotes
 from app.utils.log_util import logger
+import asyncio
 import time
 from app.schemas.response import (
     CoderMessage,
@@ -12,10 +13,9 @@ from app.schemas.response import (
     CoordinatorMessage,
 )
 from app.services.redis_manager import redis_manager
-from app.config.setting import settings
+from app.config.setting import settings, ApiType, resolve_model_chain
 from app.schemas.enums import AgentType
 from app.schemas.response import StreamDeltaMessage
-from app.config.setting import ApiType
 from app.core.llm.types import StandardResponse
 from app.core.llm.providers.base import BaseProvider
 from app.core.llm.providers.openai_chat import OpenAIChatProvider
@@ -25,6 +25,21 @@ from app.core.llm.providers.anthropic import AnthropicProvider
 
 class LLMConfigError(RuntimeError):
     """LLM 配置缺失时抛出，与 JSON 解析的 ValueError 区分开，避免被重试循环误捕获。"""
+
+
+def _is_conn_error(err: BaseException) -> bool:
+    """503/timeout/overloaded/rate-limit: switch model, do not burn MAX_RETRIES."""
+    err_msg = str(err)
+    return (
+        "Connection error" in err_msg
+        or "Connection refused" in err_msg
+        or "timeout" in err_msg.lower()
+        or "APITimeoutError" in err_msg
+        or "503" in err_msg
+        or "529" in err_msg
+        or "overloaded" in err_msg.lower()
+        or "rate limit" in err_msg.lower()
+    )
 
 
 class LLM:
@@ -40,16 +55,19 @@ class LLM:
         max_tokens: int | None = None,
         reasoning_effort: str | None = None,
         thinking_budget: int | None = None,
+        fallback_models: str | None = None,
     ):
         self.api_type = api_type
         self.api_key = api_key
-        self.model = model
         self.base_url = base_url
         self.chat_count = 0
         self.max_tokens = max_tokens
         self.reasoning_effort = reasoning_effort
         self.thinking_budget = thinking_budget
         self.task_id = task_id
+        self._model_chain = resolve_model_chain(model, fallback_models)
+        self._active_index = 0
+        self.model = self._model_chain[0] if self._model_chain else model
         self.provider = self._create_provider(api_type)
 
     def _create_provider(self, api_type: ApiType | None) -> BaseProvider:
@@ -80,6 +98,7 @@ class LLM:
         top_p: float | None = None,
         agent_name: str = "SystemAgent",
         sub_title: str | None = None,
+        notify: bool = True,
     ) -> StandardResponse:
         self._validate_config(agent_name)
 
@@ -139,6 +158,7 @@ class LLM:
         tokens_widened = False
 
         attempt = 0
+        laps_done = 0
         while True:
             try:
                 response = await self.provider.call(
@@ -184,32 +204,64 @@ class LLM:
                     tokens_widened = True
                     continue
                 self.chat_count += 1
-                await self.send_message(response, agent_name, sub_title)
+                if notify:
+                    await self.send_message(response, agent_name, sub_title)
                 return response
             except Exception as e:
+                logger.error(f"LLM 调用失败: {str(e)}")
+                if stream_agent_type is not None and self.task_id:
+                    await _flush_delta()
+                    await redis_manager.publish_message(
+                        self.task_id,
+                        StreamDeltaMessage(
+                            agent_type=stream_agent_type,  # type: ignore[arg-type]
+                            done=True,
+                        ),
+                    )
+                if _is_conn_error(e):
+                    chain = self._model_chain or [
+                        m for m in (self.model,) if m
+                    ]
+                    n = len(chain)
+                    # 有备用模型：过载立即切下一个；单模型仍走下面的 MAX_RETRIES 退避
+                    if n > 1:
+                        next_index = (self._active_index + 1) % n
+                        wrapping = next_index == 0
+                        if wrapping:
+                            laps_done += 1
+                            if laps_done >= 2:
+                                raise
+                        old = self.model
+                        self._active_index = next_index
+                        self.model = chain[next_index]
+                        logger.warning(
+                            f"[{agent_name}] 连接类错误，从 {old} 切换到 {self.model}"
+                        )
+                        if self.task_id:
+                            await redis_manager.publish_message(
+                                self.task_id,
+                                SystemMessage(
+                                    # type 必须是 info：warning/error/success 会让前端 isRunning=false
+                                    content=f"模型过载或超时，从 {old} 切换到 {self.model}",
+                                    type="info",
+                                ),
+                            )
+                        if wrapping:
+                            wait = min(5 * (3 ** (laps_done - 1)), 60)
+                            logger.warning(
+                                f"备用链已轮询一圈，退避 {wait}s 后再试"
+                            )
+                            await asyncio.sleep(wait)
+                        continue
                 attempt += 1
-                logger.error(f"第{attempt}次重试: {str(e)}")
                 if attempt >= effective_max_retries:
                     raise
-                err_msg = str(e)
-                is_conn_error = (
-                    "Connection error" in err_msg
-                    or "Connection refused" in err_msg
-                    or "timeout" in err_msg.lower()
-                    or "APITimeoutError" in err_msg
-                    # 上游过载/限流（hy3 等聚合端风暴期）：退避等待而非快速烧完重试
-                    or "503" in err_msg
-                    or "529" in err_msg
-                    or "overloaded" in err_msg.lower()
-                    or "rate limit" in err_msg.lower()
-                )
-                if is_conn_error:
-                    # 网络/上游瞬断：指数退避（5s→15s→30s→60s），等待恢复而非快速烧完重试
+                if _is_conn_error(e):
                     wait = min(5 * (3 ** (attempt - 1)), 60)
                     logger.warning(f"连接类错误，退避 {wait}s 后重试")
-                    time.sleep(wait)
+                    await asyncio.sleep(wait)
                 else:
-                    time.sleep(retry_delay * min(attempt, 10))
+                    await asyncio.sleep(retry_delay * min(attempt, 10))
 
     def _validate_and_fix_tool_calls(self, history: list) -> list:
         """验证并修复工具调用完整性。"""
@@ -300,11 +352,10 @@ class LLM:
 
 
 async def simple_chat(model: LLM, history: list) -> str:
-    """使用 LLM 进行简单的单轮对话。"""
-    response = await model.provider.call(
-        messages=history,
-        model=model.model,  # type: ignore[arg-type]
-        api_key=model.api_key,  # type: ignore[arg-type]
-        base_url=model.base_url,
+    """使用 LLM 进行简单的单轮对话（走 failover，不推流/不发终稿）。"""
+    response = await model.chat(
+        history=history,
+        agent_name="MemoryCompress",
+        notify=False,
     )
     return response.content or ""

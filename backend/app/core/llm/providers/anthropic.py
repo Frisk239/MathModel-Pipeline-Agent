@@ -4,7 +4,11 @@ import json as _json
 import re
 
 from anthropic import AsyncAnthropic
-from app.core.llm.providers.base import BaseProvider, HTTP_USER_AGENT
+from app.core.llm.providers.base import (
+    BaseProvider,
+    HTTP_USER_AGENT,
+    llm_http_timeout,
+)
 from app.core.llm.types import StandardResponse, ToolCall, Usage
 
 # 思考深度档位到 budget_tokens 的换算表（Anthropic 协议只接受数值预算）
@@ -39,6 +43,7 @@ class AnthropicProvider(BaseProvider):
             api_key=api_key,
             base_url=base_url,
             default_headers={"User-Agent": HTTP_USER_AGENT},
+            timeout=llm_http_timeout(),
         )
 
         system_prompt, anthropic_messages = self._convert_messages(messages)
