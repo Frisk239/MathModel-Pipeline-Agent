@@ -28,6 +28,7 @@ from app.core.quality.g2_code_gate import (
     check_notebook_artifacts,
     combine_g2,
     format_repair_roadmap,
+    is_plan_fallback_candidate,
     run_g2_ai_review,
 )
 from app.core.quality.g4_final_review import run_g4_final_review, run_g4_recheck
@@ -272,6 +273,8 @@ class MathModelWorkFlow(WorkFlow):
         self.gate_reports = []
         self.g1_leftover_items = []
         self.g2_leftover_items = []
+        # v3/P2-5：G2 耗尽时方案回退的使用记录（每问最多回退一次，防循环）
+        self._g2_fallback_used: set[str] = set()
         self._writing_started = False
         try:
             await self._execute_impl(problem)
@@ -611,6 +614,63 @@ class MathModelWorkFlow(WorkFlow):
                 try:
                     round_no = self.state.request_repair("g2")
                 except Exception:
+                    # v3/P2-5：主因为"方案未实现"（F4 方案过重）且该问未回退过 →
+                    # 回退第二候选给 +1 轮，优于带一串 critical 落款降级放行。
+                    # 仅 AUTO_MODE 生效：人工模式把决策权留给人（revise 可写"改用候选2"）。
+                    if (
+                        settings.AUTO_MODE
+                        and key not in self._g2_fallback_used
+                        and is_plan_fallback_candidate(g2_report.items)
+                    ):
+                        self._g2_fallback_used.add(key)
+                        self.state.repair_rounds["g2"] = (
+                            self.state.repair_used("g2") + 1
+                        )
+                        self.state.save()
+                        round_no = self.state.repair_used("g2")
+                        self.state.record_auto_degrade(
+                            "g2_plan_fallback",
+                            f"({key}) 方案超出实现预算（{g2_report.summary}），"
+                            "自动回退建模候选矩阵的第二候选并追加一轮",
+                        )
+                        archived_fb = archive_stale_deliverables(
+                            self.work_dir, round_no, since=subtask_started_at
+                        )
+                        plan_excerpt = str(
+                            modeler_response.questions_solution.get(key, "")
+                        )[:1500]
+                        roadmap_text = (
+                            "【方案回退指令】原方案在修复轮耗尽后仍无法实现"
+                            f"（门报告：{g2_report.summary}）。判定主因：方案复杂度"
+                            "超出实现预算。要求改用建模方案候选矩阵中的第二候选模型"
+                            "（或更简单的可执行候选）：\n"
+                            "1. 先用最简结构跑通主链路：核心决策变量→目标→关键约束→"
+                            "求解→结果文件写出\n"
+                            "2. 原方案中预算内无法实现的复杂结构（如大M半连续、复杂"
+                            "滚动窗口），要么给出等价简化实现，要么在执行总结中如实"
+                            "记录差异与理由\n"
+                            "3. 环境能力清单仍然有效，求解器只能用清单内可用项\n"
+                            f"【原方案节选】{plan_excerpt}"
+                        )
+                        if archived_fb:
+                            roadmap_text += (
+                                "\n（上轮交付物已归档至 _retry_archive/，禁止读取，"
+                                "本轮必须端到端重新生成）"
+                            )
+                        await redis_manager.publish_message(
+                            self.task_id,
+                            SystemMessage(
+                                content=f"({key}) 方案超预算，自动回退第二候选（+1 轮）",
+                                type="warning",
+                            ),
+                        )
+                        coder_prompt = (
+                            f"{coder_prompt}\n\n{roadmap_text}"
+                        )
+                        coder_response = await coder_agent.run(
+                            prompt=coder_prompt, subtask_title=key
+                        )
+                        continue
                     if settings.AUTO_MODE:
                         # 全自动模式：耗尽自动降级放行（遗留如实记录，与人工决策区分审计）
                         self.state.record_auto_degrade(
@@ -661,6 +721,12 @@ class MathModelWorkFlow(WorkFlow):
                     )
 
                 await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content=f"G2 门拦截（{key}），第 {round_no} 轮定向修复",
+                        type="warning",
+                    ),
+                )
                 coder_prompt = (
                     f"{coder_prompt}\n\n【上一轮代码未通过质量门，必须修复以下问题】\n"
                     f"{roadmap_text}\n"

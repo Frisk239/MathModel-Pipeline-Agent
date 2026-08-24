@@ -330,6 +330,28 @@ def format_repair_roadmap(items: list[RoadmapItem]) -> str:
     return "\n\n".join(blocks)
 
 
+def is_plan_fallback_candidate(items: list[RoadmapItem]) -> bool:
+    """v3/P2-5：判断 G2 耗尽的主因是否为"方案未实现"（F4 方案过重）。
+
+    实证（20260823-233814）：门报告反复出现"承诺的 MILP 仍未实现"类
+    critical——方案复杂度超出 Coder 修复预算，此时降级放行只会留下一堆
+    critical 落款；回退到建模候选矩阵的第二候选更可交付。
+    """
+    markers = (
+        "未实现",
+        "仍未实现",
+        "没有实现",
+        "完全未",
+        "不存在任何",
+        "无代码支撑",
+        "未构建",
+    )
+    return any(
+        it.severity == Severity.CRITICAL and any(m in it.problem for m in markers)
+        for it in items
+    )
+
+
 def combine_g2(l1_items: list[RoadmapItem], l2_report: GateReport | None) -> GateReport:
     """合并 L1/L2 为单一门判定。"""
     items = list(l1_items)
