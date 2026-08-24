@@ -31,8 +31,13 @@ watch(
 			if (summaryRef.value) {
 				summaryRef.value.scrollLeft = summaryRef.value.scrollWidth;
 			}
-			if (expanded.value && thinkBodyRef.value) {
-				thinkBodyRef.value.scrollTop = thinkBodyRef.value.scrollHeight;
+			const body = thinkBodyRef.value;
+			if (expanded.value && body) {
+				// 仅当用户本来就停在展开体底部时才跟随增量；
+				// 用户上滑回看思考过程时不拉回
+				const atBottom =
+					body.scrollHeight - body.scrollTop - body.clientHeight <= 40;
+				if (atBottom) body.scrollTop = body.scrollHeight;
 			}
 		});
 	},

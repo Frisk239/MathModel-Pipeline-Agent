@@ -291,9 +291,10 @@ function isStreamDelta(payload: Message): payload is StreamDeltaMessage {
 	/** 聊天消息列表（用户、Coder Agent、系统消息） */
 	const chatMessages = computed(() =>
 		messages.value.filter((msg) => {
+			// 所有 Agent 的终稿都进左侧时间线（过程性输出留档）：
+			// Modeler 方案、Writer 各节与 Coder 回复一样可见，右侧 tab 是结构化视图
 			if (
 				msg.msg_type === "agent" &&
-				msg.agent_type === AgentType.CODER &&
 				msg.content != null &&
 				msg.content !== ""
 			) {
