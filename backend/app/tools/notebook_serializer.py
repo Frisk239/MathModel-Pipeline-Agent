@@ -86,6 +86,12 @@ class NotebookSerializer:
         self.nb["cells"][-1]["outputs"].append(nbf_error_output)
         self.write_to_notebook()
 
+    def discard_last_code_cell(self) -> None:
+        """丢弃本轮失败执行对应的末尾代码单元，并同步磁盘。"""
+        if self.nb["cells"] and self.nb["cells"][-1].get("cell_type") == "code":
+            self.nb["cells"].pop()
+            self.write_to_notebook()
+
     def add_image_to_notebook(self, image, mime_type):
         image_output = nbf.new_output(
             output_type="display_data", data={mime_type: image}

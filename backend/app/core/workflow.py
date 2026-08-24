@@ -767,6 +767,14 @@ class MathModelWorkFlow(WorkFlow):
                 user_output.save_result()
 
             while not g4_passed:
+                if settings.AUTO_MODE:
+                    # 全自动模式：G4 未过自动降级（遗留写局限性），不挂起
+                    self.state.record_auto_degrade(
+                        "g4", g4_report.summary
+                    )
+                    leftover_items = roadmap_items
+                    g4_passed = True
+                    break
                 decision = await wait_for_approval(
                     self.task_id,
                     self.state,

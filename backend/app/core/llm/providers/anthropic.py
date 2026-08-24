@@ -1,6 +1,8 @@
 """Anthropic Messages API Provider。"""
 
 import json as _json
+import re
+
 from anthropic import AsyncAnthropic
 from app.core.llm.providers.base import BaseProvider, HTTP_USER_AGENT
 from app.core.llm.types import StandardResponse, ToolCall, Usage
@@ -78,6 +80,12 @@ class AnthropicProvider(BaseProvider):
                 ))
 
         content = "".join(content_parts) if content_parts else None
+        if content and tools and not tool_calls:
+            allowed_names = self._get_tool_names(tools)
+            content, text_tool_calls = self._extract_text_tool_calls(
+                content, allowed_names
+            )
+            tool_calls.extend(text_tool_calls)
 
         usage = Usage(
             prompt_tokens=response.usage.input_tokens,
@@ -151,7 +159,7 @@ class AnthropicProvider(BaseProvider):
         return system_prompt, converted
 
     def _convert_tools(self, tools: list[dict]) -> list[dict]:
-        """将 OpenAI tools 格式转为 Anthropic 格式。"""
+        """将 OpenAI tools 转为 Anthropic 格式，并接受已转换的 schema。"""
         converted = []
         for tool in tools:
             if tool.get("type") == "function":
@@ -161,7 +169,100 @@ class AnthropicProvider(BaseProvider):
                     "description": func.get("description", ""),
                     "input_schema": func.get("parameters", {}),
                 })
+            elif tool.get("name") and tool.get("input_schema"):
+                converted.append({
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "input_schema": tool["input_schema"],
+                })
         return converted
+
+    def _get_tool_names(self, tools: list[dict]) -> set[str]:
+        """提取当前请求实际声明的工具名，用于文本兜底白名单。"""
+        names: set[str] = set()
+        for tool in tools:
+            if tool.get("type") == "function":
+                name = tool.get("function", {}).get("name")
+            else:
+                name = tool.get("name")
+            if isinstance(name, str) and name:
+                names.add(name)
+        return names
+
+    def _extract_text_tool_calls(
+        self, content: str, allowed_names: set[str]
+    ) -> tuple[str | None, list[ToolCall]]:
+        """归一化兼容端放进 ``<tool_call>`` 文本块的工具调用。
+
+        只接收当前请求已声明的工具名和对象型参数；无法解析的文本原样保留。
+        """
+        pattern = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+        calls: list[ToolCall] = []
+        retained: list[str] = []
+        last_end = 0
+
+        for match in pattern.finditer(content):
+            try:
+                payload = _json.loads(match.group(1))
+            except (_json.JSONDecodeError, TypeError):
+                continue
+
+            name = payload.get("name") if isinstance(payload, dict) else None
+            arguments = (
+                payload.get("arguments", payload.get("input", {}))
+                if isinstance(payload, dict)
+                else None
+            )
+            if name not in allowed_names:
+                continue
+            if isinstance(arguments, str):
+                try:
+                    parsed_arguments = _json.loads(arguments)
+                except _json.JSONDecodeError:
+                    continue
+                if not isinstance(parsed_arguments, dict):
+                    continue
+                arguments_json = arguments
+            elif isinstance(arguments, dict):
+                arguments_json = _json.dumps(arguments, ensure_ascii=False)
+            else:
+                continue
+
+            retained.append(content[last_end:match.start()])
+            last_end = match.end()
+            call_id = payload.get("id") or f"text-tool-call-{len(calls) + 1}"
+            calls.append(
+                ToolCall(id=str(call_id), name=name, arguments=arguments_json)
+            )
+
+        if not calls:
+            xml_pattern = re.compile(
+                r"<tool_call>\s*<name>\s*([^<]+?)\s*</name>\s*"
+                r"<code>\s*(.*?)\s*</code>\s*</tool_call>",
+                re.DOTALL,
+            )
+            for match in xml_pattern.finditer(content):
+                name = match.group(1).strip()
+                if name not in allowed_names:
+                    continue
+                retained.append(content[last_end:match.start()])
+                last_end = match.end()
+                calls.append(
+                    ToolCall(
+                        id=f"text-tool-call-{len(calls) + 1}",
+                        name=name,
+                        arguments=_json.dumps(
+                            {"code": match.group(2).strip()}, ensure_ascii=False
+                        ),
+                    )
+                )
+
+        if not calls:
+            return content, []
+
+        retained.append(content[last_end:])
+        remaining_content = "".join(retained).strip() or None
+        return remaining_content, calls
 
     def _convert_tool_choice(self, tool_choice: str) -> dict:
         """转换 tool_choice 为 Anthropic 格式。"""

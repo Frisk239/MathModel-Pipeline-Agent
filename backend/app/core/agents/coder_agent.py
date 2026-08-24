@@ -80,6 +80,8 @@ class CoderAgent(Agent):
         await self.append_chat_history({"role": "user", "content": prompt})
 
         retry_count = 0
+        no_tool_retry = 0
+        has_successful_execution = False
         last_error_message = ""
 
         while True:
@@ -107,14 +109,54 @@ class CoderAgent(Agent):
 
             self.current_chat_turns += 1
             logger.info(f"当前对话轮次: {self.current_chat_turns}")
-            
+
             try:
+                # 每个子任务至少成功执行一次代码。在此之前即使供应商忽略
+                # required，也不能把普通正文误判为任务完成。
                 response = await self._chat(
                     history=self.chat_history,
                     tools=tools,
-                    tool_choice="auto",
+                    tool_choice=(
+                        "auto" if has_successful_execution else "required"
+                    ),
                     agent_name=self.__class__.__name__,
                 )
+
+                if not response.tool_calls and not has_successful_execution:
+                    no_tool_retry += 1
+                    if no_tool_retry <= 3:
+                        logger.warning(
+                            "子任务尚未成功执行代码却收到无工具响应"
+                            f"（第 {no_tool_retry} 次纠正）"
+                        )
+                        assistant_msg: dict = {
+                            "role": "assistant",
+                            "content": response.content or "",
+                        }
+                        if response.reasoning_content:
+                            assistant_msg["reasoning_content"] = (
+                                response.reasoning_content
+                            )
+                        await self.append_chat_history(assistant_msg)
+                        await self.append_chat_history(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "本子任务还没有成功执行任何代码。"
+                                    "必须通过 execute_code 工具调用执行代码（code 参数传入完整代码），"
+                                    "不能只在正文说明计划或输出代码。请直接发起 execute_code 工具调用。"
+                                ),
+                            }
+                        )
+                        continue
+                    logger.error("无工具响应纠正 3 次仍失败，子任务不予完成")
+                    return CoderToWriter(
+                        code_response=(
+                            "任务失败：模型连续返回普通正文，未通过 "
+                            "execute_code 成功执行代码"
+                        ),
+                        created_images=[],
+                    )
 
                 # 如果有工具调用
                 if response.tool_calls:
@@ -192,6 +234,7 @@ class CoderAgent(Agent):
                             continue
                         else:
                             # 成功执行的tool响应
+                            has_successful_execution = True
                             await self.append_chat_history(
                                 {
                                     "role": "tool",

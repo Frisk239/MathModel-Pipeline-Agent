@@ -93,7 +93,21 @@ class ModelerAgent(Agent):
 
             json_str = response.content
             if not json_str:
-                raise ValueError("返回的 JSON 字符串为空，请检查输入内容。")
+                attempt += 1
+                logger.warning(
+                    f"JSON 响应为空 (第{attempt}/{MAX_JSON_RETRIES}次)，"
+                    "请求模型重新生成"
+                )
+                await self.append_chat_history(
+                    {
+                        "role": "user",
+                        "content": (
+                            "你刚才返回的内容为空。请重新生成完整结果，"
+                            "严格只输出合法 JSON，不要省略任何必需字段。"
+                        ),
+                    }
+                )
+                continue
 
             questions_solution = repair_json(json_str)
             if questions_solution:

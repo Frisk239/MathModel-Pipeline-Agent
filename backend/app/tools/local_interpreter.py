@@ -131,6 +131,11 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 self.notebook_serializer.add_code_cell_error_to_notebook(out_str)
                 content_to_display.append(StdErrModel(msg=out_str))
 
+        if error_occurred:
+            # 错误详情已进入日志、WebSocket 和模型反思上下文；交付用 notebook
+            # 只保留成功执行的单元，避免 G2 修复轮无法清除历史失败尝试。
+            self.notebook_serializer.discard_last_code_cell()
+
         logger.info(f"text_to_gpt: {text_to_gpt}")
         combined_text = "\n".join(text_to_gpt)
 

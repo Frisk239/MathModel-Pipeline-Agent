@@ -285,6 +285,9 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
 
         combined_text = "\n".join(text_to_gpt)
 
+        if error_occurred:
+            self.notebook_serializer.discard_last_code_cell()
+
         # 在代码执行完成后，立即同步文件
         try:
             await self.download_all_files_from_sandbox()
