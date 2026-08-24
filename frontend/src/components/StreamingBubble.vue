@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import type { AgentType } from "@/utils/enum";
+import { renderMarkdown } from "@/utils/markdown";
 import { Brain, ChevronDown, LoaderCircle } from "lucide-vue-next";
-import { marked } from "marked";
 import { computed, ref, watch } from "vue";
 
 // 流式过程气泡：思维链折叠行（运行中滚动显示最后一行 + shimmer 扫光）
 // 与正文打字机。形态参考 deepseek-harness 的 ReasoningRow：默认收起、
-// 轻量纯文本（不做 markdown），结束后由终稿 agent 消息接管。
+// 思考体轻量纯文本；正文用与终稿一致的富文本渲染。
 
 const props = defineProps<{
 	agentType: AgentType;
@@ -26,17 +26,31 @@ const lastLine = computed(() => {
 });
 
 /** 正文富文本渲染（与终稿 Bubble 同一渲染器，流式期间高频重解析量级可忽略） */
-const renderedText = computed(() => marked.parse(props.text));
+const renderedText = ref("");
+watch(
+	() => props.text,
+	async (text) => {
+		if (!text) {
+			renderedText.value = "";
+			return;
+		}
+		renderedText.value = await renderMarkdown(text);
+	},
+	{ immediate: true },
+);
 
-/** 正文气泡头像（与 Bubble 的 agent 头像一致） */
-const agentEmoji = computed(() => {
+const agentMeta = computed(() => {
 	switch (props.agentType) {
 		case "CoderAgent":
-			return "👨‍💻";
+			return { emoji: "👨‍💻", label: "代码手" };
 		case "WriterAgent":
-			return "✍️";
+			return { emoji: "✍️", label: "论文手" };
+		case "ModelerAgent":
+			return { emoji: "🧮", label: "建模手" };
+		case "CoordinatorAgent":
+			return { emoji: "🧭", label: "协调者" };
 		default:
-			return "🤖";
+			return { emoji: "🤖", label: "Agent" };
 	}
 });
 
@@ -61,34 +75,42 @@ watch(
 </script>
 
 <template>
-  <div class="mb-3 flex flex-col gap-2">
+  <div class="mb-3 flex w-full flex-col gap-1">
+    <!-- 头像行 -->
+    <div class="flex items-center gap-1.5 select-none">
+      <span class="text-base leading-none">{{ agentMeta.emoji }}</span>
+      <span class="text-xs font-medium text-muted-foreground">{{ agentMeta.label }}</span>
+    </div>
+
     <!-- 思维链折叠行 -->
-    <div v-if="props.thinking" class="overflow-hidden rounded-lg border bg-muted/40 text-xs">
-      <button type="button" class="streaming-think-header flex w-full items-center gap-1.5 px-2.5 py-1.5"
+    <div v-if="props.thinking"
+      class="overflow-hidden rounded-xl border border-black/5 bg-muted/40 text-xs dark:border-white/10">
+      <button type="button"
+        class="streaming-think-header flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left"
         @click="expanded = !expanded">
         <Brain class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span class="shrink-0 font-medium text-muted-foreground">思考中</span>
-        <div ref="summaryRef" class="think-summary min-w-0 flex-1 overflow-hidden text-left">
+        <div ref="summaryRef" class="min-w-0 flex-1 overflow-hidden">
           <span class="block truncate text-muted-foreground/80">{{ lastLine }}</span>
         </div>
         <ChevronDown class="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform"
           :class="{ 'rotate-180': expanded }" />
       </button>
       <pre v-show="expanded" ref="thinkBodyRef"
-        class="think-body max-h-64 overflow-y-auto whitespace-pre-wrap break-words px-3 pb-2 text-muted-foreground">{{ props.thinking }}</pre>
+        class="max-h-64 overflow-y-auto whitespace-pre-wrap break-words px-3 pb-2 font-sans text-muted-foreground">{{ props.thinking }}</pre>
     </div>
-    <!-- 正文打字机（markdown 富文本渲染） -->
-    <div v-if="props.text" class="flex flex-col gap-1">
-      <span class="text-2xl select-none mb-1">{{ agentEmoji }}</span>
-      <div class="relative max-w-[80%] rounded-2xl bg-muted px-4 py-2 text-sm">
-        <div class="prose prose-sm prose-slate max-w-none" v-html="renderedText"></div>
-        <span class="streaming-cursor absolute right-2 bottom-2" />
-      </div>
+
+    <!-- 正文打字机（markdown 富文本渲染，光标右下角） -->
+    <div v-if="props.text"
+      class="relative max-w-none rounded-xl border border-black/5 bg-muted/60 px-3.5 py-2.5 text-sm shadow-sm dark:border-white/10">
+      <div class="prose prose-sm prose-slate max-w-none" v-html="renderedText"></div>
+      <span class="streaming-cursor"></span>
     </div>
+
     <!-- 还没有任何增量：等待模型首 token -->
-    <div v-if="!props.text && !props.thinking" class="flex items-center gap-1.5 text-xs text-muted-foreground">
+    <div v-if="!props.text && !props.thinking" class="flex items-center gap-1.5 py-1 text-xs text-muted-foreground">
       <LoaderCircle class="h-3 w-3 animate-spin" />
-      <span>{{ props.agentType }} 正在思考…</span>
+      <span>{{ agentMeta.label }}正在思考…</span>
     </div>
   </div>
 </template>
@@ -121,35 +143,9 @@ watch(
 	}
 }
 
-.think-summary span {
-	display: inline-block;
-	min-width: 100%;
-}
-
-.think-body::-webkit-scrollbar {
-	width: 4px;
-}
-
 @media (prefers-reduced-motion: reduce) {
 	.streaming-think-header::after {
 		animation: none;
-	}
-}
-
-/* 打字机光标 */
-.streaming-cursor {
-	display: inline-block;
-	width: 2px;
-	height: 1em;
-	margin-left: 2px;
-	vertical-align: text-bottom;
-	background: hsl(var(--foreground) / 0.7);
-	animation: cursor-blink 1s step-end infinite;
-}
-
-@keyframes cursor-blink {
-	50% {
-		opacity: 0;
 	}
 }
 </style>

@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { cn } from "@/lib/utils";
 import type { AgentType } from "@/utils/enum";
-import { marked } from "marked";
+import { renderMarkdown } from "@/utils/markdown";
 import type { HTMLAttributes } from "vue";
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 
 // ---- Props ----
 
 interface BubbleProps {
-	type: "agent" | "user";
+	type: "user" | "agent";
 	agentType?: AgentType;
 	class?: HTMLAttributes["class"];
 	content: string;
@@ -18,11 +17,37 @@ const props = withDefaults(defineProps<BubbleProps>(), {
 	type: "user",
 });
 
-// ---- Computed ----
+// ---- Render ----
 
-/** 渲染 Markdown 内容 */
-const renderedContent = computed(() => {
-	return marked.parse(props.content);
+/** 富文本渲染（KaTeX 公式 / 相对图片 / GFM 表格），renderMarkdown 为异步 */
+const renderedContent = ref("");
+watch(
+	() => props.content,
+	async (content) => {
+		if (!content) {
+			renderedContent.value = "";
+			return;
+		}
+		renderedContent.value = await renderMarkdown(content);
+	},
+	{ immediate: true },
+);
+
+// ---- Agent 元信息 ----
+
+const agentMeta = computed(() => {
+	switch (props.agentType) {
+		case "CoderAgent":
+			return { emoji: "👨‍💻", label: "代码手" };
+		case "WriterAgent":
+			return { emoji: "✍️", label: "论文手" };
+		case "ModelerAgent":
+			return { emoji: "🧮", label: "建模手" };
+		case "CoordinatorAgent":
+			return { emoji: "🧭", label: "协调者" };
+		default:
+			return { emoji: "🤖", label: "Agent" };
+	}
 });
 </script>
 
@@ -30,173 +55,177 @@ const renderedContent = computed(() => {
   <div :class="[
     'bubble',
     props.type === 'user' ? 'bubble-user' : '',
-    props.type === 'agent' && props.agentType === 'CoderAgent' ? 'bubble-coder' : '',
-    props.type === 'agent' && props.agentType === 'WriterAgent' ? 'bubble-writer' : '',
+    props.type === 'agent' ? 'bubble-agent' : '',
     props.class
   ]">
-    <div class="flex flex-col gap-1 flex-1">
-      <!-- 头像在上方 -->
-      <span v-if="props.type === 'user'" class="text-2xl select-none mb-1">🧑</span>
-      <span v-else-if="props.type === 'agent' && props.agentType === 'CoderAgent'"
-        class="text-2xl select-none mb-1">👨‍💻</span>
-      <span v-else-if="props.type === 'agent' && props.agentType === 'WriterAgent'"
-        class="text-2xl select-none mb-1">✍️</span>
-      <!-- 气泡内容在下方 -->
-      <div :class="cn(
-        'max-w-[80%] rounded-2xl px-4 py-2 text-sm',
-        props.type === 'user'
-          ? 'bg-primary text-primary-foreground prose-invert'
-          : 'bg-muted text-foreground',
-        'prose prose-sm prose-slate max-w-none'
-      )">
-        <div v-html="renderedContent"></div>
+    <!-- 用户消息：右对齐蓝底 -->
+    <div v-if="props.type === 'user'" class="flex flex-col items-end gap-1">
+      <div class="prose prose-sm max-w-[80%] rounded-2xl bg-[#2563eb] px-4 py-2 text-sm text-white shadow-sm"
+        v-html="renderedContent"></div>
+    </div>
+    <!-- Agent 消息：头像行 + 内容卡 -->
+    <div v-else class="flex w-full flex-col gap-1">
+      <div class="flex items-center gap-1.5 select-none">
+        <span class="text-base leading-none">{{ agentMeta.emoji }}</span>
+        <span class="text-xs font-medium text-muted-foreground">{{ agentMeta.label }}</span>
       </div>
+      <div
+        class="prose prose-sm prose-slate max-w-none rounded-xl border border-black/5 bg-muted/60 px-3.5 py-2.5 text-sm shadow-sm dark:border-white/10"
+        v-html="renderedContent"></div>
     </div>
   </div>
 </template>
 
 <style>
+.bubble {
+	display: flex;
+	flex: 1 1 0%;
+}
+
+.bubble-user {
+	justify-content: flex-end;
+}
+
+/* ---- 富文本排版（用户气泡内白字覆盖） ---- */
+
 .prose {
-  @apply text-inherit;
+	@apply text-inherit;
 }
 
 .prose p {
-  @apply my-1;
+	@apply my-1;
 }
 
-.prose p:not(:first-child) {
-  @apply mt-1;
+.prose p:first-child {
+	@apply mt-0;
+}
+
+.prose p:last-child {
+	@apply mb-0;
 }
 
 .prose h1,
 .prose h2,
 .prose h3,
 .prose h4 {
-  @apply my-1 font-semibold;
+	@apply my-1.5 font-semibold;
 }
 
 .prose h1 {
-  @apply text-lg;
+	@apply text-lg;
 }
 
 .prose h2 {
-  @apply text-base;
+	@apply text-base;
 }
 
 .prose h3,
 .prose h4 {
-  @apply text-sm;
+	@apply text-sm;
 }
 
 .prose ul,
 .prose ol {
-  @apply my-1 pl-4;
+	@apply my-1 pl-4;
 }
 
 .prose ul {
-  @apply list-disc;
+	@apply list-disc;
 }
 
 .prose ol {
-  @apply list-decimal;
+	@apply list-decimal;
 }
 
 .prose li {
-  @apply my-0.5;
+	@apply my-0.5;
 }
 
 .prose code {
-  @apply px-1 py-0.5 rounded bg-black/10 dark:bg-white/10;
+	@apply rounded bg-black/[0.07] px-1 py-0.5 font-mono text-[0.85em] dark:bg-white/10;
 }
 
+/* 代码块：GitHub Dark 风格深色块，与正文形成对比 */
 .prose pre {
-  @apply p-2 my-1 rounded bg-black/10 dark:bg-white/10 overflow-x-auto;
-  max-width: 100%;
-  width: 100%;
+	@apply my-1.5 overflow-x-auto rounded-lg p-3;
+	background: #0f172a;
+	color: #e2e8f0;
+	max-width: 100%;
+	width: 100%;
+	font-size: 0.8rem;
+	line-height: 1.55;
 }
 
 .prose pre code {
-  @apply bg-transparent p-0;
-  @apply overflow-y-auto;
-  max-width: 100%;
-  white-space: pre-wrap;
-  word-break: break-word;
+	@apply bg-transparent p-0;
+	color: inherit;
+	white-space: pre-wrap;
+	word-break: break-word;
 }
 
 .prose blockquote {
-  @apply my-1 pl-3 border-l-2 border-current opacity-80 italic;
+	@apply my-1 border-l-2 border-current pl-3 italic opacity-75;
 }
 
 .prose a {
-  @apply underline underline-offset-2 opacity-80 hover:opacity-100;
+	@apply underline underline-offset-2 opacity-80 hover:opacity-100;
 }
 
 .prose img {
-  @apply my-1 rounded-lg;
+	@apply my-1 rounded-lg;
+}
+
+.prose hr {
+	@apply my-2 border-current opacity-10;
 }
 
 .prose table {
-  @apply my-1 w-full;
+	@apply my-1.5 w-full border-collapse text-xs;
 }
 
-.prose thead {
-  @apply border-b border-current opacity-20;
+.prose th,
+.prose td {
+	@apply border-b border-black/10 px-2 py-1 text-left dark:border-white/15;
 }
 
 .prose th {
-  @apply p-2 text-left font-semibold;
+	@apply bg-black/[0.04] font-semibold dark:bg-white/[0.06];
 }
 
-.prose td {
-  @apply p-2 border-t border-current opacity-10;
+/* 数学公式 */
+.prose .math-block {
+	@apply my-1.5 overflow-x-auto text-center;
 }
 
-.prose-invert {
-  @apply text-primary-foreground;
-}
-
-/* 确保透明度样式不会被继承 */
-.prose thead *,
-.prose td * {
-  @apply opacity-100;
-}
-
-.bubble {
-  display: flex;
-  flex: 1 1 0%;
-}
-
-.bubble-user {
-  justify-content: flex-end;
-}
-
-.bubble-coder,
-.bubble-writer {
-  justify-content: flex-start;
-}
-
-/* 用户气泡颜色 */
+/* 用户气泡内反色 */
 .bubble-user .prose {
-  background: #2563eb;
-  /* 蓝色 */
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
-  border: 1px solid #2563eb;
+	color: #fff;
 }
 
-/* CoderAgent 气泡颜色 */
-.bubble-coder .prose {
-  background: #f1f5f9;
-  /* 浅灰 */
-  color: #0f172a;
-  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.08);
+.bubble-user .prose a {
+	color: #fff;
+	text-decoration-color: rgb(255 255 255 / 0.6);
 }
 
-/* WriterAgent 气泡颜色 */
-.bubble-writer .prose {
-  background: #fef9c3;
-  /* 浅黄 */
-  color: #92400e;
-  box-shadow: 0 2px 8px rgba(251, 191, 36, 0.08);
+.bubble-user .prose code {
+	background: rgb(255 255 255 / 0.18);
+}
+
+/* 流式光标（StreamingBubble 复用全局 prose 样式） */
+.streaming-cursor {
+	position: absolute;
+	right: 0.5rem;
+	bottom: 0.5rem;
+	display: inline-block;
+	width: 2px;
+	height: 1em;
+	background: hsl(var(--foreground) / 0.7);
+	animation: cursor-blink 1s step-end infinite;
+}
+
+@keyframes cursor-blink {
+	50% {
+		opacity: 0;
+	}
 }
 </style>
