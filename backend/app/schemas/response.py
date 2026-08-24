@@ -109,7 +109,7 @@ class WriterMessage(AgentMessage):
 class ApprovalMessage(Message):
     """HIL 审批消息，发送到前端触发审批对话框。"""
 
-    msg_type: Literal["system", "agent", "user", "tool", "approval"] = "approval"  # type: ignore[assignment]
+    msg_type: Literal["system", "agent", "user", "tool", "approval", "stream"] = "approval"  # type: ignore[assignment]
     checkpoint_id: str = ""
     prompt: dict = Field(default_factory=dict)
     options: list[str] = Field(
@@ -124,6 +124,20 @@ class ApprovalMessage(Message):
     )
     timeout: int = 300
 
+
+class StreamDeltaMessage(Message):
+    """LLM 流式增量（思维链/正文），仅经 WS 实时透传，不落盘历史。
+
+    一次模型调用产生一串 delta 消息 + 一条 done；前端按 agent_type 聚合为
+    streaming 状态，done 后由终稿 agent 消息接管展示。
+    """
+
+    msg_type: Literal["system", "agent", "user", "tool", "approval", "stream"] = "stream"  # type: ignore[assignment]
+    agent_type: AgentType
+    kind: Literal["thinking", "text"] = "text"
+    delta: str = ""
+    done: bool = False
+
 # 所有可能的消息类型
 MessageType = Union[
     SystemMessage,
@@ -136,4 +150,5 @@ MessageType = Union[
     WriterMessage,
     ModelerMessage,
     CoordinatorMessage,
+    StreamDeltaMessage,
 ]

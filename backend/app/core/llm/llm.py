@@ -14,6 +14,7 @@ from app.schemas.response import (
 from app.services.redis_manager import redis_manager
 from app.config.setting import settings
 from app.schemas.enums import AgentType
+from app.schemas.response import StreamDeltaMessage
 from app.config.setting import ApiType
 from app.core.llm.types import StandardResponse
 from app.core.llm.providers.base import BaseProvider
@@ -93,6 +94,50 @@ class LLM:
 
         messages = history or []
 
+        # 流式增量节流推送（100ms 合帧 + 尾部 flush + done）：
+        # token 级 delta 直接发布会淹没 0.1s 轮询转发的 WS 通道
+        stream_agent_type = None
+        try:
+            stream_agent_type = AgentType(agent_name)
+        except ValueError:
+            pass  # G2Review 等非流水线角色不推流式
+        pending: dict[str, list[str]] = {"thinking": [], "text": []}
+        last_flush = time.monotonic()
+
+        async def _flush_delta() -> None:
+            nonlocal last_flush
+            for kind, buf in pending.items():
+                if not buf:
+                    continue
+                await redis_manager.publish_message(
+                    self.task_id,
+                    StreamDeltaMessage(
+                        agent_type=stream_agent_type,  # type: ignore[arg-type]
+                        kind=kind,  # type: ignore[arg-type]
+                        delta="".join(buf),
+                    ),
+                )
+                buf.clear()
+            last_flush = time.monotonic()
+
+        async def on_delta(kind: str, text: str) -> None:
+            if stream_agent_type is None or not self.task_id:
+                return
+            buf = pending.get(kind)
+            if buf is None:
+                return
+            buf.append(text)
+            if time.monotonic() - last_flush >= 0.1:
+                await _flush_delta()
+
+        # 思考挤占输出预算的自适应放大：GLM 等 anthropic 兼容端不遵守
+        # budget_tokens 硬约束，思考可膨胀至上万 token，把正文挤到零或截断
+        # （stop_reason=max_tokens）。此时重发同样请求没有意义，放大
+        # max_tokens 重试一次（×2，封顶模型上限），仅一次，仍失败交给上层重试。
+        MAX_TOKENS_CEILING = 128000
+        adaptive_max_tokens = self.max_tokens
+        tokens_widened = False
+
         attempt = 0
         while True:
             try:
@@ -103,12 +148,41 @@ class LLM:
                     base_url=self.base_url,
                     tools=tools,
                     tool_choice=tool_choice,
-                    max_tokens=self.max_tokens,
+                    max_tokens=adaptive_max_tokens,
                     top_p=top_p,
                     reasoning_effort=self.reasoning_effort,
                     thinking_budget=self.thinking_budget,
+                    on_delta=on_delta,
                 )
-                logger.info(f"API返回: content={response.content!r}, tool_calls={len(response.tool_calls)}")
+                if stream_agent_type is not None and self.task_id:
+                    await _flush_delta()
+                    await redis_manager.publish_message(
+                        self.task_id,
+                        StreamDeltaMessage(
+                            agent_type=stream_agent_type,  # type: ignore[arg-type]
+                            done=True,
+                        ),
+                    )
+                logger.info(
+                    f"API返回: content={response.content!r}, "
+                    f"tool_calls={len(response.tool_calls)}, "
+                    f"stop_reason={response.stop_reason}"
+                )
+                if (
+                    response.stop_reason == "max_tokens"
+                    and not response.tool_calls
+                    and adaptive_max_tokens is not None
+                    and adaptive_max_tokens < MAX_TOKENS_CEILING
+                    and not tokens_widened
+                ):
+                    widened = min(adaptive_max_tokens * 2, MAX_TOKENS_CEILING)
+                    logger.warning(
+                        f"[{agent_name}] 输出被 max_tokens={adaptive_max_tokens} 截断"
+                        f"（思考挤占输出预算），放大至 {widened} 重试一次"
+                    )
+                    adaptive_max_tokens = widened
+                    tokens_widened = True
+                    continue
                 self.chat_count += 1
                 await self.send_message(response, agent_name, sub_title)
                 return response

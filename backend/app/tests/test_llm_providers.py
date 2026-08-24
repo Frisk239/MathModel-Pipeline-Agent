@@ -90,11 +90,22 @@ class TestAnthropicTextToolCallFallback:
         raw_response = SimpleNamespace(
             content=[SimpleNamespace(type="text", text=raw_text)],
             usage=SimpleNamespace(input_tokens=10, output_tokens=20),
+            stop_reason="end_turn",
         )
 
-        class FakeMessages:
-            async def create(self, **kwargs):
+        class FakeStream:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get_final_message(self):
                 return raw_response
+
+        class FakeMessages:
+            def stream(self, **kwargs):
+                return FakeStream()
 
         class FakeClient:
             def __init__(self, **kwargs):
@@ -158,3 +169,148 @@ class TestLLMConfig:
 
         llm = LLM(api_type=None)
         assert isinstance(llm.provider, OpenAIChatProvider)
+
+
+class TestAdaptiveMaxTokens:
+    """思考挤占输出预算的自适应放大（max_tokens 截断时 ×2 重试一次）。"""
+
+    def _make_llm(self, responses):
+        calls = []
+
+        class FakeProvider:
+            async def call(self, **kwargs):
+                calls.append(kwargs["max_tokens"])
+                return responses[len(calls) - 1]
+
+        llm = LLM(api_key="k", model="m", max_tokens=8192)
+        llm.provider = FakeProvider()
+        return llm, calls
+
+    def test_widens_once_on_truncation(self):
+        from app.core.llm.types import StandardResponse
+
+        llm, calls = self._make_llm(
+            [
+                StandardResponse(content=None, stop_reason="max_tokens"),
+                StandardResponse(content="ok", stop_reason="end_turn"),
+            ]
+        )
+        resp = asyncio.run(llm.chat(history=[{"role": "user", "content": "hi"}]))
+        assert calls == [8192, 16384]  # 放大一次后成功
+        assert resp.content == "ok"
+
+    def test_widens_only_once_even_if_still_truncated(self):
+        from app.core.llm.types import StandardResponse
+
+        llm, calls = self._make_llm(
+            [
+                StandardResponse(content=None, stop_reason="max_tokens"),
+                StandardResponse(content=None, stop_reason="max_tokens"),
+            ]
+        )
+        resp = asyncio.run(llm.chat(history=[{"role": "user", "content": "hi"}]))
+        assert calls == [8192, 16384]  # 只放大一次，之后交给上层重试
+        assert resp.content is None
+
+    def test_ceiling_caps_widening(self):
+        from app.core.llm.types import StandardResponse
+
+        llm, calls = self._make_llm(
+            [
+                StandardResponse(content=None, stop_reason="max_tokens"),
+            ]
+        )
+        llm.max_tokens = 128000  # 已在 GLM-5.3 输出上限，不放大
+        resp = asyncio.run(llm.chat(history=[{"role": "user", "content": "hi"}]))
+        assert calls == [128000]
+        assert resp.stop_reason == "max_tokens"
+
+    def test_no_widen_with_tool_calls(self):
+        from app.core.llm.types import ToolCall
+        from app.core.llm.types import StandardResponse
+
+        llm, calls = self._make_llm(
+            [
+                StandardResponse(
+                    tool_calls=[ToolCall(id="1", name="t", arguments="{}")],
+                    stop_reason="max_tokens",
+                )
+            ]
+        )
+        resp = asyncio.run(llm.chat(history=[{"role": "user", "content": "hi"}]))
+        assert calls == [8192]  # 工具调用截断交给反思回路，不放大
+        assert len(resp.tool_calls) == 1
+
+
+class TestAnthropicStreamDelta:
+    """真流式：on_delta 逐事件上抛 thinking/text 增量，thinking 采集进 reasoning_content。"""
+
+    def test_on_delta_and_thinking_capture(self, provider, monkeypatch):
+        raw_response = SimpleNamespace(
+            content=[
+                SimpleNamespace(type="thinking", thinking="思前"),
+                SimpleNamespace(type="text", text="答"),
+            ],
+            usage=SimpleNamespace(input_tokens=1, output_tokens=2),
+            stop_reason="end_turn",
+        )
+        events = [
+            SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(type="thinking_delta", thinking="思前"),
+            ),
+            SimpleNamespace(type="content_block_start"),
+            SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(type="text_delta", text="答"),
+            ),
+        ]
+
+        class FakeStream:
+            def __aiter__(self):
+                self._iter = iter(events)
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._iter)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get_final_message(self):
+                return raw_response
+
+        class FakeMessages:
+            def stream(self, **kwargs):
+                return FakeStream()
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                self.messages = FakeMessages()
+
+        monkeypatch.setattr(
+            "app.core.llm.providers.anthropic.AsyncAnthropic", FakeClient
+        )
+        received: list[tuple[str, str]] = []
+
+        async def on_delta(kind: str, text: str) -> None:
+            received.append((kind, text))
+
+        response = asyncio.run(
+            provider.call(
+                messages=[{"role": "user", "content": "hi"}],
+                model="glm-5.3",
+                api_key="k",
+                on_delta=on_delta,
+            )
+        )
+        assert received == [("thinking", "思前"), ("text", "答")]
+        assert response.content == "答"
+        assert response.reasoning_content == "思前"
+        assert response.stop_reason == "end_turn"

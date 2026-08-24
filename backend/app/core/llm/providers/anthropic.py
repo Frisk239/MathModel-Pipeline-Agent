@@ -33,6 +33,7 @@ class AnthropicProvider(BaseProvider):
         top_p: float | None = None,
         reasoning_effort: str | None = None,
         thinking_budget: int | None = None,
+        on_delta=None,
     ) -> StandardResponse:
         client = AsyncAnthropic(
             api_key=api_key,
@@ -64,14 +65,32 @@ class AnthropicProvider(BaseProvider):
         if thinking:
             kwargs["thinking"] = thinking
 
-        response = await client.messages.create(**kwargs)
+        # 流式 + 聚合：GLM 等 anthropic 兼容端对大 max_tokens（>16384）强制要求
+        # 流式（"Streaming is required for operations that may take longer than
+        # 10 minutes"）；流式聚合结果与非流式 Message 同构，且长请求不易被中间层掐断。
+        # on_delta 提供时逐事件上抛 thinking/text 增量（过程展示）。
+        async with client.messages.stream(**kwargs) as stream:
+            if on_delta is not None:
+                async for event in stream:
+                    if event.type != "content_block_delta":
+                        continue
+                    delta = getattr(event, "delta", None)
+                    delta_type = getattr(delta, "type", "")
+                    if delta_type == "thinking_delta":
+                        await on_delta("thinking", getattr(delta, "thinking", "") or "")
+                    elif delta_type == "text_delta":
+                        await on_delta("text", getattr(delta, "text", "") or "")
+            response = await stream.get_final_message()
 
         content_parts: list[str] = []
+        thinking_parts: list[str] = []
         tool_calls: list[ToolCall] = []
 
         for block in response.content:
             if block.type == "text":
                 content_parts.append(block.text)
+            elif block.type == "thinking":
+                thinking_parts.append(getattr(block, "thinking", "") or "")
             elif block.type == "tool_use":
                 tool_calls.append(ToolCall(
                     id=block.id,
@@ -92,7 +111,13 @@ class AnthropicProvider(BaseProvider):
             completion_tokens=response.usage.output_tokens,
         )
 
-        return StandardResponse(content=content, tool_calls=tool_calls, usage=usage)
+        return StandardResponse(
+            content=content,
+            reasoning_content="".join(thinking_parts) or None,
+            tool_calls=tool_calls,
+            usage=usage,
+            stop_reason=response.stop_reason,
+        )
 
     def _build_thinking(
         self,

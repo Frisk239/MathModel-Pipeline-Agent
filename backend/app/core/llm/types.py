@@ -31,3 +31,5 @@ class StandardResponse:
     reasoning_content: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
+    # anthropic stop_reason / openai finish_reason 的归一化（max_tokens 截断诊断用）
+    stop_reason: str | None = None

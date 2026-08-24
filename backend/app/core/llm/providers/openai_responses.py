@@ -20,6 +20,7 @@ class OpenAIResponsesProvider(BaseProvider):
         top_p: float | None = None,
         reasoning_effort: str | None = None,
         thinking_budget: int | None = None,
+        on_delta=None,
     ) -> StandardResponse:
         client = AsyncOpenAI(
             api_key=api_key,

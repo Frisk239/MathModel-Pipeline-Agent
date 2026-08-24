@@ -77,6 +77,9 @@ class RedisManager:
             logger.debug(
                 f"消息已发布到频道 {channel}:mes_type:{message.msg_type}:msg_content:{message.content}"
             )
+            # 流式增量仅实时透传，不落盘历史（重放由终稿 agent 消息承担）
+            if message.msg_type == "stream":
+                return
             # 保存消息到文件
             await self._save_message_to_file(task_id, message)
         except Exception as e:

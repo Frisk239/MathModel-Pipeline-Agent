@@ -93,7 +93,7 @@ onBeforeUnmount(() => {
   <div class="fixed inset-0">
     <ResizablePanelGroup direction="horizontal" class="h-full rounded-lg border">
       <ResizablePanel :default-size="40" class="h-full">
-        <ChatArea :messages="taskStore.chatMessages" />
+        <ChatArea :messages="taskStore.chatMessages" :streaming="taskStore.streaming" />
       </ResizablePanel>
       <ResizableHandle />
       <ResizablePanel :default-size="60" class="h-full min-w-0">

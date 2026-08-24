@@ -3,6 +3,7 @@ import NotebookCell from "@/components/NotebookCell.vue";
 import { useStickyScroll } from "@/composables/useStickyScroll";
 import { useTaskStore } from "@/stores/task";
 import type { CodeCell, NoteCell, ResultCell } from "@/utils/interface";
+import { LoaderCircle } from "lucide-vue-next";
 import { computed, ref } from "vue";
 
 // ---- Reactive State ----
@@ -55,6 +56,13 @@ const { onScroll } = useStickyScroll(scrollRef, () => cells.value);
       cell.type === 'code' ? 'pt-2' : 'pt-0'
     ]">
       <NotebookCell :cell="cell" />
+    </div>
+
+    <!-- 末尾代码单元尚无结果回传且任务运行中：执行中指示 -->
+    <div v-if="cells.length > 0 && cells[cells.length - 1].type === 'code' && taskStore.isRunning"
+      class="mx-3 mb-2 flex items-center gap-1.5 rounded-md border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground">
+      <LoaderCircle class="h-3 w-3 animate-spin" />
+      正在执行代码…
     </div>
 
     <!-- 无内容时的提示 -->

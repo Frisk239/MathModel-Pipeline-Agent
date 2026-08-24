@@ -9,7 +9,7 @@ export type SystemMessageType = "info" | "warning" | "success" | "error";
 export interface BaseMessage {
 	id: string;
 	created_at?: string;
-	msg_type: "system" | "agent" | "user" | "tool";
+	msg_type: "system" | "agent" | "user" | "tool" | "stream";
 	content?: string | null;
 }
 
@@ -125,6 +125,15 @@ export interface WriterMessage extends AgentMessage {
 	sub_title?: string;
 }
 
+/** LLM 流式增量消息（思维链/正文），仅实时透传不落盘历史 */
+export interface StreamDeltaMessage extends BaseMessage {
+	msg_type: "stream";
+	agent_type: AgentType;
+	kind: "thinking" | "text";
+	delta: string;
+	done: boolean;
+}
+
 /** 所有消息类型的联合类型 */
 export type Message =
 	| SystemMessage
@@ -133,4 +142,5 @@ export type Message =
 	| WriterMessage
 	| ModelerMessage
 	| CoordinatorMessage
-	| ToolMessage;
+	| ToolMessage
+	| StreamDeltaMessage;

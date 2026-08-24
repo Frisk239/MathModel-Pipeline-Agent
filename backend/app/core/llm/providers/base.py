@@ -1,10 +1,15 @@
 """LLM Provider 抽象基类。"""
 
 from abc import ABC, abstractmethod
+from typing import Awaitable, Callable
+
 from app.core.llm.types import StandardResponse
 
 # 出站请求统一 User-Agent：部分中转站 WAF 直接屏蔽 OpenAI/Python 等 SDK 默认 UA
 HTTP_USER_AGENT = "MathModelAgent/0.1"
+
+# 流式增量回调：(kind, delta_text)，kind ∈ {"thinking", "text"}
+OnDelta = Callable[[str, str], Awaitable[None]]
 
 
 class BaseProvider(ABC):
@@ -23,6 +28,7 @@ class BaseProvider(ABC):
         top_p: float | None = None,
         reasoning_effort: str | None = None,
         thinking_budget: int | None = None,
+        on_delta: OnDelta | None = None,
     ) -> StandardResponse:
         """调用 LLM 并返回标准化响应。
 
@@ -37,6 +43,7 @@ class BaseProvider(ABC):
             top_p: 采样温度参数。
             reasoning_effort: 思考深度档位（如 low/medium/high/max），由各协议映射。
             thinking_budget: Anthropic 协议的思考 token 预算（budget_tokens）。
+            on_delta: 流式增量回调（协议不支持流式时忽略）。
 
         Returns:
             标准化响应。

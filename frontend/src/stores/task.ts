@@ -7,6 +7,7 @@ import type {
 	InterpreterMessage,
 	Message,
 	ModelerMessage,
+	StreamDeltaMessage,
 	UserMessage,
 	WriterMessage,
 } from "@/utils/response";
@@ -45,6 +46,17 @@ export const useTaskStore = defineStore("task", () => {
 	/** 任务是否正在运行 */
 	const isRunning = ref(false);
 
+	/** 按任务分组的流式聚合状态（当前活跃流，done 后清除，由终稿消息接管） */
+	const streamingByTask = ref<
+		Record<string, { agentType: AgentType; thinking: string; text: string } | null>
+	>({});
+
+	/** 当前任务的流式状态 */
+	const streaming = computed(() => {
+		const id = currentTaskId.value;
+		return id ? (streamingByTask.value[id] ?? null) : null;
+	});
+
 	// ---- Helpers ----
 
 	/** 获取消息时间戳 */
@@ -68,18 +80,23 @@ export const useTaskStore = defineStore("task", () => {
 		});
 	}
 
-	/** 类型守卫：判断是否为有效的消息对象 */
-	function isMessagePayload(payload: unknown): payload is Message {
-		if (!payload || typeof payload !== "object") {
-			return false;
-		}
-		const msgType = Reflect.get(payload, "msg_type");
-		return (
-			typeof Reflect.get(payload, "id") === "string" &&
-			typeof msgType === "string" &&
-			["system", "agent", "user", "tool"].includes(msgType)
-		);
+/** 类型守卫：判断是否为有效的消息对象 */
+function isMessagePayload(payload: unknown): payload is Message {
+	if (!payload || typeof payload !== "object") {
+		return false;
 	}
+	const msgType = Reflect.get(payload, "msg_type");
+	return (
+		typeof Reflect.get(payload, "id") === "string" &&
+		typeof msgType === "string" &&
+		["system", "agent", "user", "tool", "stream"].includes(msgType)
+	);
+}
+
+/** 类型守卫：判断是否为流式增量消息 */
+function isStreamDelta(payload: Message): payload is StreamDeltaMessage {
+	return payload.msg_type === "stream";
+}
 
 	/** 设置当前活跃任务 */
 	function setCurrentTask(taskId: string) {
@@ -141,6 +158,31 @@ export const useTaskStore = defineStore("task", () => {
 		);
 	}
 
+	/** 聚合流式增量到 streaming 状态（不进消息列表） */
+	function applyStreamDelta(taskId: string, delta: StreamDeltaMessage) {
+		const current = streamingByTask.value[taskId] ?? null;
+		if (delta.done) {
+			streamingByTask.value[taskId] = null;
+			return;
+		}
+		if (current && current.agentType !== delta.agent_type) {
+			// 新 Agent 开始流式：重置聚合
+			streamingByTask.value[taskId] = null;
+		}
+		const state =
+			streamingByTask.value[taskId] ?? {
+				agentType: delta.agent_type,
+				thinking: "",
+				text: "",
+			};
+		if (delta.kind === "thinking" && delta.delta) {
+			state.thinking += delta.delta;
+		} else if (delta.kind === "text" && delta.delta) {
+			state.text += delta.delta;
+		}
+		streamingByTask.value[taskId] = { ...state };
+	}
+
 	// ---- Actions ----
 
 	/** 连接 WebSocket 接收实时消息 */
@@ -161,6 +203,10 @@ export const useTaskStore = defineStore("task", () => {
 			(data) => {
 				if (!isMessagePayload(data)) {
 					console.warn("忽略非标准任务消息:", data);
+					return;
+				}
+				if (isStreamDelta(data)) {
+					applyStreamDelta(taskId, data);
 					return;
 				}
 				appendMessage(taskId, data);
@@ -344,6 +390,7 @@ export const useTaskStore = defineStore("task", () => {
 		messages,
 		wsStatus,
 		isRunning,
+		streaming,
 		chatMessages,
 		coordinatorMessages,
 		modelerMessages,

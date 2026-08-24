@@ -2,15 +2,20 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useStickyScroll } from "@/composables/useStickyScroll";
+import type { AgentType } from "@/utils/enum";
 import type { Message } from "@/utils/response";
 import { Send } from "lucide-vue-next";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import Bubble from "./Bubble.vue";
+import StreamingBubble from "./StreamingBubble.vue";
 import SystemMessage from "./SystemMessage.vue";
 
 // ---- Props ----
 
-const props = defineProps<{ messages: Message[] }>();
+const props = defineProps<{
+	messages: Message[];
+	streaming?: { agentType: AgentType; thinking: string; text: string } | null;
+}>();
 
 // ---- Reactive State ----
 
@@ -20,7 +25,13 @@ const scrollRef = ref<HTMLDivElement | null>(null);
 
 // ---- Scroll ----
 
-const { onScroll } = useStickyScroll(scrollRef, () => props.messages);
+// 流式增量也触发粘底滚动（消息与 streaming 双数据源）
+const scrollSource = computed(() => [
+	props.messages,
+	props.streaming?.thinking.length ?? 0,
+	props.streaming?.text.length ?? 0,
+]);
+const { onScroll } = useStickyScroll(scrollRef, scrollSource);
 
 // ---- Methods ----
 
@@ -47,6 +58,9 @@ const sendMessage = () => {
             :type="message.type" />
         </div>
       </template>
+      <!-- 流式过程气泡（思维链 + 正文打字机），done 后由终稿消息接管 -->
+      <StreamingBubble v-if="props.streaming" :key="props.streaming.agentType" :agent-type="props.streaming.agentType"
+        :thinking="props.streaming.thinking" :text="props.streaming.text" />
     </div>
     <form class="w-full max-w-2xl mx-auto flex items-center gap-2 pt-4" @submit.prevent="sendMessage">
       <Input ref="inputRef" v-model="inputValue" type="text" placeholder="请输入消息..." class="flex-1" autocomplete="off" />
