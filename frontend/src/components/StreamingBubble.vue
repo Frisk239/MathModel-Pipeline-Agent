@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AgentType } from "@/utils/enum";
 import { Brain, ChevronDown, LoaderCircle } from "lucide-vue-next";
+import { marked } from "marked";
 import { computed, ref, watch } from "vue";
 
 // 流式过程气泡：思维链折叠行（运行中滚动显示最后一行 + shimmer 扫光）
@@ -22,6 +23,21 @@ const lastLine = computed(() => {
 	if (!content) return "";
 	const lines = content.split("\n").filter(Boolean);
 	return lines[lines.length - 1] ?? "";
+});
+
+/** 正文富文本渲染（与终稿 Bubble 同一渲染器，流式期间高频重解析量级可忽略） */
+const renderedText = computed(() => marked.parse(props.text));
+
+/** 正文气泡头像（与 Bubble 的 agent 头像一致） */
+const agentEmoji = computed(() => {
+	switch (props.agentType) {
+		case "CoderAgent":
+			return "👨‍💻";
+		case "WriterAgent":
+			return "✍️";
+		default:
+			return "🤖";
+	}
 });
 
 watch(
@@ -61,10 +77,13 @@ watch(
       <pre v-show="expanded" ref="thinkBodyRef"
         class="think-body max-h-64 overflow-y-auto whitespace-pre-wrap break-words px-3 pb-2 text-muted-foreground">{{ props.thinking }}</pre>
     </div>
-    <!-- 正文打字机 -->
-    <div v-if="props.text"
-      class="whitespace-pre-wrap break-words rounded-lg bg-muted px-3 py-2 text-sm leading-relaxed">
-      {{ props.text }}<span class="streaming-cursor" />
+    <!-- 正文打字机（markdown 富文本渲染） -->
+    <div v-if="props.text" class="flex flex-col gap-1">
+      <span class="text-2xl select-none mb-1">{{ agentEmoji }}</span>
+      <div class="relative max-w-[80%] rounded-2xl bg-muted px-4 py-2 text-sm">
+        <div class="prose prose-sm prose-slate max-w-none" v-html="renderedText"></div>
+        <span class="streaming-cursor absolute right-2 bottom-2" />
+      </div>
     </div>
     <!-- 还没有任何增量：等待模型首 token -->
     <div v-if="!props.text && !props.thinking" class="flex items-center gap-1.5 text-xs text-muted-foreground">
