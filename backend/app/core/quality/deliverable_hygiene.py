@@ -42,7 +42,18 @@ def archive_stale_deliverables(work_dir: str, round_no: int, since: float) -> li
                     continue
             except OSError:
                 continue
-            os.makedirs(archive_dir, exist_ok=True)
-            shutil.move(path, os.path.join(archive_dir, os.path.basename(path)))
+            try:
+                os.makedirs(archive_dir, exist_ok=True)
+                shutil.move(path, os.path.join(archive_dir, os.path.basename(path)))
+            except OSError as e:
+                # Windows 下 Jupyter kernel 可能仍持有产物句柄（WinError 32）：
+                # 归档是卫生动作，单文件被占用只跳过并留待 L1 溯源检查把关，
+                # 绝不能炸掉整条流水线
+                from app.utils.log_util import logger
+
+                logger.warning(
+                    f"归档交付物失败（文件被占用或不可移动），已跳过：{path}（{e}）"
+                )
+                continue
             archived.append(os.path.basename(path))
     return archived

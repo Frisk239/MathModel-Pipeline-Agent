@@ -78,3 +78,21 @@ def test_l1_ignores_stale_deliverable_from_previous_subtask(tmp_path):
         str(tmp_path / "notebook.ipynb"), str(tmp_path), deliverable_since=since
     )
     assert not any("非本问代码生成" in it.problem for it in items)
+
+
+def test_archive_skips_locked_file_without_raising(tmp_path, monkeypatch):
+    """Windows 文件锁（WinError 32）下归档跳过该文件而非炸掉流水线。"""
+    import shutil as _shutil
+
+    from app.core.quality import deliverable_hygiene as dh
+
+    since = time.time() - 60
+    _touch(tmp_path / "result2.xlsx", mtime=since + 30)
+
+    def _locked_move(src, dst):
+        raise OSError(32, "另一个程序正在使用此文件，进程无法访问。")
+
+    monkeypatch.setattr(_shutil, "move", _locked_move)
+    archived = dh.archive_stale_deliverables(str(tmp_path), round_no=1, since=since)
+    assert archived == []
+    assert os.path.exists(tmp_path / "result2.xlsx")  # 原地保留，交由 L1 溯源把关
