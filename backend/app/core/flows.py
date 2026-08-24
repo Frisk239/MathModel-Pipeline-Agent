@@ -4,6 +4,18 @@ from app.models.user_output import UserOutput
 from app.tools.base_interpreter import BaseCodeInterpreter
 from app.core.agents.modeler_agent import ModelerToCoder
 
+# v3/P2-2 数据与主链路纪律：灭 F1 清洗泥潭（修复轮全耗在 KeyError/AttributeError/
+# FileNotFoundError 往返，始终未抵达建模）。规则落任务级 prompt 才可靠（三期经验）。
+DATA_DISCIPLINE = """【数据与主链路纪律（必须遵守）】
+1. 读完原始数据后的第一个代码 cell：将所有 DataFrame 列名统一重命名为合法标识符
+（仅字母/数字/下划线，用英文语义，禁止「/」、空格、含中文单位的后缀如「亩」「元」），
+并打印重命名对照表；此后全程只使用规范列名，杜绝 KeyError 与 itertuples 属性错误
+2. 数据清洗与建模分离：清洗 cell 一次成型，禁止在建模阶段回头修改清洗逻辑；
+确需修正时以新 cell 显式重定义并注明原因
+3. 中间产物（清洗后的表）必须先落盘、再在后续 cell 读取，写盘与读盘顺序不得颠倒
+4. 交付主链路优先级：建模→求解→结果文件写出→图表。必须先跑通主链路；
+清洗细节、图表美化等收尾工作放最后处理"""
+
 
 class Flows:
     """管理数学建模任务的求解流程和写作流程。"""
@@ -55,11 +67,14 @@ class Flows:
             if key.startswith("ques") and key != "ques_count"
         }
         solutions = modeler_response.questions_solution
-        env_block = f"\n{self.env_capability}\n" if self.env_capability else ""
+        prompt_prefix = ""
+        if self.env_capability:
+            prompt_prefix += f"\n{self.env_capability}\n"
+        prompt_prefix += f"\n{DATA_DISCIPLINE}\n"
         ques_flow = {
             key: {
                 "coder_prompt": f"""
-                        {env_block}参考建模手给出的解决方案{solutions.get(key, "")}
+                        {prompt_prefix}参考建模手给出的解决方案{solutions.get(key, "")}
                         完成如下问题{value}
                     """,
             }
@@ -68,14 +83,14 @@ class Flows:
         flows = {
             "eda": {
                 "coder_prompt": f"""
-                        {env_block}参考建模手给出的解决方案{solutions.get("eda", "对数据进行探索性分析")}
+                        {prompt_prefix}参考建模手给出的解决方案{solutions.get("eda", "对数据进行探索性分析")}
                         对当前目录下数据进行EDA分析(数据清洗,可视化),清洗后的数据保存当前目录下,**不需要复杂的模型**
                     """,
             },
             **ques_flow,
             "sensitivity_analysis": {
                 "coder_prompt": f"""
-                        {env_block}参考建模手给出的解决方案{solutions.get("sensitivity_analysis", "对模型进行灵敏度分析")}
+                        {prompt_prefix}参考建模手给出的解决方案{solutions.get("sensitivity_analysis", "对模型进行灵敏度分析")}
                         完成敏感性分析
                     """,
             },
