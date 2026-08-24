@@ -1,6 +1,7 @@
 """工作流模块，编排多 Agent 协作完成数学建模任务。"""
 
 import asyncio
+import time
 from pathlib import Path
 
 from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAgent
@@ -31,6 +32,7 @@ from app.core.quality.g2_code_gate import (
 from app.core.quality.g4_final_review import run_g4_final_review, run_g4_recheck
 from app.tools.interpreter_factory import create_interpreter
 from app.tools.env_capability import get_capability_description
+from app.core.quality.deliverable_hygiene import archive_stale_deliverables
 from app.services.redis_manager import redis_manager
 from app.tools.notebook_serializer import NotebookSerializer
 from app.core.flows import Flows
@@ -558,6 +560,7 @@ class MathModelWorkFlow(WorkFlow):
             )
 
             coder_prompt = value["coder_prompt"]
+            subtask_started_at = time.time()  # v3/P2-3：本问交付物溯源与归档的时间基准
             coder_response = await coder_agent.run(
                 prompt=coder_prompt, subtask_title=key
             )
@@ -575,7 +578,10 @@ class MathModelWorkFlow(WorkFlow):
             g2_prior_items: list[str] | None = None
             while settings.QUALITY_GATES_ENABLED:
                 l1_items = check_notebook_artifacts(
-                    nb_path, self.work_dir, coder_response.created_images
+                    nb_path,
+                    self.work_dir,
+                    coder_response.created_images,
+                    deliverable_since=subtask_started_at,
                 )
                 l2_report = await run_g2_ai_review(
                     review_llm,
@@ -641,13 +647,21 @@ class MathModelWorkFlow(WorkFlow):
                     if decision.feedback:
                         roadmap_text += f"\n【人工补充意见】{decision.feedback}"
 
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(
-                        content=f"G2 门拦截（{key}），第 {round_no} 轮定向修复",
-                        type="warning",
-                    ),
+                # v3/P2-3：归档本问上轮交付物，防止新一轮读取遗留产物冒充本轮产出
+                # （只动 mtime>=subtask_started_at 的本问产物，此前问次的合法产物不动）
+                archived = archive_stale_deliverables(
+                    self.work_dir, round_no, since=subtask_started_at
                 )
+                if archived:
+                    roadmap_text += (
+                        "\n\n【交付物溯源指令】上一轮交付物（"
+                        f"{'、'.join(archived[:5])}）已归档至 "
+                        f"_retry_archive/round{round_no}/（仅供审计，禁止读取）。"
+                        "本轮必须由 notebook 代码端到端重新生成全部结果文件，"
+                        "禁止把读取到的既有文件内容当作本轮求解结果。"
+                    )
+
+                await redis_manager.publish_message(
                 coder_prompt = (
                     f"{coder_prompt}\n\n【上一轮代码未通过质量门，必须修复以下问题】\n"
                     f"{roadmap_text}\n"

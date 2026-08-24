@@ -8,6 +8,7 @@ L2 四条定向审查（来自实测病灶，冻结清单，不让评审自由�
 """
 
 import json
+import os
 import re
 
 from app.core.llm.llm import LLM
@@ -18,6 +19,10 @@ from app.core.quality.contracts import (
     Obligation,
     RoadmapItem,
     Severity,
+)
+from app.core.quality.deliverable_hygiene import (
+    DELIVERABLE_PATTERNS,
+    WRITE_CALL_MARKERS,
 )
 
 # notebook/代码产物中的演示数据标记（L1）
@@ -83,8 +88,15 @@ def check_notebook_artifacts(
     notebook_path: str,
     work_dir: str,
     created_images: list[str] | None = None,
+    deliverable_since: float | None = None,
 ) -> list[RoadmapItem]:
-    """L1 脚本层：notebook 无报错 cell、无演示数据标记、产物完整。"""
+    """L1 脚本层：notebook 无报错 cell、无演示数据标记、产物完整。
+
+    Args:
+        deliverable_since: 本问开始时间戳（v3/P2-3）。提供时执行交付物溯源检查：
+            本问产生的交付物（mtime >= since）必须能在 notebook 源码中找到
+            写盘证据（文件名 + 写出调用），否则判"非本轮代码生成"。
+    """
     items: list[RoadmapItem] = []
 
     def _add(problem: str, criteria: str, severity=Severity.MAJOR):
@@ -158,14 +170,35 @@ def check_notebook_artifacts(
             )
 
     if created_images is not None:
-        import os
-
         missing_imgs = [img for img in created_images if not os.path.exists(os.path.join(work_dir, img))]
         if missing_imgs:
             _add(
                 f"声称生成的图表缺失：{', '.join(missing_imgs[:3])}",
                 "确保所有声明图表真实落盘",
             )
+
+    # v3/P2-3 交付物溯源：本问交付物必须能对应到 notebook 中的写盘代码
+    if deliverable_since is not None:
+        import glob
+
+        has_write_call = any(marker in src_all for marker in WRITE_CALL_MARKERS)
+        for pattern in DELIVERABLE_PATTERNS:
+            for path in glob.glob(os.path.join(work_dir, pattern)):
+                try:
+                    if os.path.getmtime(path) < deliverable_since:
+                        continue
+                except OSError:
+                    continue
+                name = os.path.basename(path)
+                if name in src_all and has_write_call:
+                    continue
+                _add(
+                    f"交付物 {name} 疑似非本问代码生成"
+                    f"（notebook 源码中无该文件的写出代码，可能读取了遗留产物）",
+                    f"在本问 notebook 中用代码端到端生成 {name}"
+                    f"（含 to_excel/to_csv/pickle 等写出调用并真实执行）",
+                    Severity.CRITICAL,
+                )
 
     return items
 
