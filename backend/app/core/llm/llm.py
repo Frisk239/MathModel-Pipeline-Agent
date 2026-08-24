@@ -197,6 +197,11 @@ class LLM:
                     or "Connection refused" in err_msg
                     or "timeout" in err_msg.lower()
                     or "APITimeoutError" in err_msg
+                    # 上游过载/限流（hy3 等聚合端风暴期）：退避等待而非快速烧完重试
+                    or "503" in err_msg
+                    or "529" in err_msg
+                    or "overloaded" in err_msg.lower()
+                    or "rate limit" in err_msg.lower()
                 )
                 if is_conn_error:
                     # 网络/上游瞬断：指数退避（5s→15s→30s→60s），等待恢复而非快速烧完重试

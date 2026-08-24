@@ -314,3 +314,69 @@ class TestAnthropicStreamDelta:
         assert response.content == "答"
         assert response.reasoning_content == "思前"
         assert response.stop_reason == "end_turn"
+
+
+class TestOpenAIChatStream:
+    """openai-chat 流式聚合：delta 上抛 + tool_calls 分帧拼接 + usage/finish 采集。"""
+
+    def test_stream_aggregation_and_on_delta(self, monkeypatch):
+        from types import SimpleNamespace as NS
+
+        def chunk(delta=None, finish=None, usage=None):
+            choices = [NS(delta=delta, finish_reason=finish)] if (delta or finish) else []
+            return NS(choices=choices, usage=usage)
+
+        chunks = [
+            chunk(delta=NS(content=None, reasoning_content="思前", tool_calls=None)),
+            chunk(delta=NS(content="答", reasoning_content=None, tool_calls=None)),
+            chunk(delta=NS(
+                content=None, reasoning_content=None,
+                tool_calls=[NS(index=0, id="t1", function=NS(name="execute_code", arguments='{"code": '))],
+            )),
+            chunk(delta=NS(
+                content=None, reasoning_content=None,
+                tool_calls=[NS(index=0, id=None, function=NS(name=None, arguments='"print(1)"}'))],
+            )),
+            chunk(finish="tool_calls", usage=NS(prompt_tokens=5, completion_tokens=9)),
+        ]
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                assert kwargs.get("stream") is True
+
+                async def _gen():
+                    for c in chunks:
+                        yield c
+
+                return _gen()
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                self.chat = NS(completions=FakeCompletions())
+
+        monkeypatch.setattr(
+            "app.core.llm.providers.openai_chat.AsyncOpenAI", FakeClient
+        )
+        from app.core.llm.providers.openai_chat import OpenAIChatProvider
+
+        received: list[tuple[str, str]] = []
+
+        async def on_delta(kind: str, text: str) -> None:
+            received.append((kind, text))
+
+        resp = asyncio.run(
+            OpenAIChatProvider().call(
+                messages=[{"role": "user", "content": "hi"}],
+                model="hy3",
+                api_key="k",
+                on_delta=on_delta,
+            )
+        )
+        assert received == [("thinking", "思前"), ("text", "答")]
+        assert resp.content == "答"
+        assert resp.reasoning_content == "思前"
+        assert resp.stop_reason == "tool_calls"
+        assert resp.usage.prompt_tokens == 5 and resp.usage.completion_tokens == 9
+        assert len(resp.tool_calls) == 1
+        assert resp.tool_calls[0].name == "execute_code"
+        assert resp.tool_calls[0].arguments == '{"code": "print(1)"}'

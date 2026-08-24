@@ -1,4 +1,4 @@
-"""OpenAI Chat Completions API Provider。"""
+"""OpenAI Chat Completions API Provider（流式聚合）。"""
 
 from openai import AsyncOpenAI, BadRequestError
 from app.core.llm.providers.base import BaseProvider, HTTP_USER_AGENT
@@ -6,7 +6,12 @@ from app.core.llm.types import StandardResponse, ToolCall, Usage
 
 
 class OpenAIChatProvider(BaseProvider):
-    """OpenAI Chat Completions API (/v1/chat/completions) 实现。"""
+    """OpenAI Chat Completions API (/v1/chat/completions) 实现。
+
+    统一走流式（stream=True）+ 客户端聚合：
+    - reasoning_content 增量（GLM/DeepSeek 类兼容端）经 on_delta 上抛做思考展示
+    - 长请求不易被中间层掐断（与 anthropic provider 同理）
+    """
 
     async def call(
         self,
@@ -28,7 +33,7 @@ class OpenAIChatProvider(BaseProvider):
             default_headers={"User-Agent": HTTP_USER_AGENT},
         )
 
-        kwargs: dict = {"model": model, "messages": messages}
+        kwargs: dict = {"model": model, "messages": messages, "stream": True}
         if max_tokens:
             kwargs["max_tokens"] = max_tokens
         if top_p is not None:
@@ -40,35 +45,63 @@ class OpenAIChatProvider(BaseProvider):
         if reasoning_effort and reasoning_effort != "off":
             kwargs["reasoning_effort"] = reasoning_effort
 
+        async def _consume() -> StandardResponse:
+            content_parts: list[str] = []
+            reasoning_parts: list[str] = []
+            # tool_calls 按 index 聚合：id/name 首帧到达，arguments 逐帧拼接
+            tc_acc: dict[int, dict] = {}
+            finish_reason: str | None = None
+            usage = Usage()
+            async for chunk in stream:
+                if getattr(chunk, "usage", None):
+                    usage = Usage(
+                        prompt_tokens=chunk.usage.prompt_tokens or 0,
+                        completion_tokens=chunk.usage.completion_tokens or 0,
+                    )
+                for choice in chunk.choices or []:
+                    if choice.finish_reason:
+                        finish_reason = choice.finish_reason
+                    delta = choice.delta
+                    if delta is None:
+                        continue
+                    rc = getattr(delta, "reasoning_content", None)
+                    if rc:
+                        reasoning_parts.append(rc)
+                        if on_delta is not None:
+                            await on_delta("thinking", rc)
+                    if delta.content:
+                        content_parts.append(delta.content)
+                        if on_delta is not None:
+                            await on_delta("text", delta.content)
+                    for tc in delta.tool_calls or []:
+                        acc = tc_acc.setdefault(
+                            tc.index, {"id": "", "name": "", "arguments": ""}
+                        )
+                        if tc.id:
+                            acc["id"] = tc.id
+                        if tc.function and tc.function.name:
+                            acc["name"] = tc.function.name
+                        if tc.function and tc.function.arguments:
+                            acc["arguments"] += tc.function.arguments
+
+            return StandardResponse(
+                content="".join(content_parts) or None,
+                reasoning_content="".join(reasoning_parts) or None,
+                tool_calls=[
+                    ToolCall(id=a["id"], name=a["name"], arguments=a["arguments"])
+                    for _, a in sorted(tc_acc.items())
+                ],
+                usage=usage,
+                stop_reason=finish_reason,
+            )
+
         try:
-            response = await client.chat.completions.create(**kwargs)
+            stream = await client.chat.completions.create(**kwargs)
+            return await _consume()
         except BadRequestError:
             # 部分 OpenAI 兼容端点不支持 reasoning_effort 参数，去掉后重试一次
             if "reasoning_effort" not in kwargs:
                 raise
             kwargs.pop("reasoning_effort")
-            response = await client.chat.completions.create(**kwargs)
-
-        choice = response.choices[0]
-        message = choice.message
-
-        tool_calls: list[ToolCall] = []
-        for tc in message.tool_calls or []:
-            tool_calls.append(ToolCall(
-                id=tc.id,
-                name=tc.function.name,
-                arguments=tc.function.arguments,
-            ))
-
-        usage = Usage(
-            prompt_tokens=response.usage.prompt_tokens if response.usage else 0,
-            completion_tokens=response.usage.completion_tokens if response.usage else 0,
-        )
-
-        reasoning = getattr(message, "reasoning_content", None)
-        return StandardResponse(
-            content=message.content,
-            reasoning_content=reasoning,
-            tool_calls=tool_calls,
-            usage=usage,
-        )
+            stream = await client.chat.completions.create(**kwargs)
+            return await _consume()
