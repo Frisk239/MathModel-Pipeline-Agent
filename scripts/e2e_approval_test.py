@@ -3,12 +3,13 @@
 import csv
 import io
 import json
+import os
 import random
 import time
 
 import requests
 
-BASE = "http://localhost:8001"
+BASE = os.environ.get("BACKEND_BASE_URL", "http://localhost:8001")
 
 
 def build_task():

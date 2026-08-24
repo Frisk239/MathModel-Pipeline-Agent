@@ -1,13 +1,14 @@
 """轻量审批轮询器：自动批准指定任务的所有后续检查点，直到终态。"""
 
 import json
+import os
 import sys
 import time
 
 import requests
 
 tid = sys.argv[1]
-BASE = "http://localhost:8001"
+BASE = os.environ.get("BACKEND_BASE_URL", "http://localhost:8001")
 deadline = time.time() + 50 * 60
 while time.time() < deadline:
     time.sleep(8)

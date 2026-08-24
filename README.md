@@ -25,6 +25,19 @@ docker-compose up
 
 Windows 也可双击 `win_start.bat`。
 
+## 质量门与审批体系
+
+流水线在四个 Agent（Coordinator 拆题 → Modeler 建模 → Coder 编码 → Writer 写作）之间布设四道质量门与人工检查点，设计规格见 `docs/quality-gates-plan.md` 与 `docs/adr/`：
+
+- **G1 数据完备性门**：拆题后校验题面声明附件与工作目录实存文件，防"演示数据论文"
+- **G2 代码质量门**：每问编码后两层把关（L1 脚本检查 + L2 AI 评审），MATERIAL 触发 ≤3 轮定向修复
+- **G3 文本门**：每节写作后查内部文案泄露、路径、占位符、引用完整性
+- **G4 终审**：七维分类判据 + 数值重算 + 机械裁决，遗留问题如实写入论文"局限性"章节
+
+检查点①②④支持人工三分支审批（approve / revise / reject）；`AUTO_MODE=true` 时门耗尽自动降级放行并记录 `auto_degraded` 审计。`QUALITY_GATES_ENABLED` / `AGENT_CONTRACTS_ENABLED` 可整体关闭还原上游基线，用于 A/B 对照。任务全程状态机持久化（`work_dir/task_state.json`），全部门报告落盘 `verify_report.md`。
+
+术语表见 `CONTEXT.md`；三期 Agent 方法论契约（建模蓝图 / 论证纪律 / 图表 DoD）见 `docs/agent-methodology-upgrade.md`。
+
 ## CI
 
 PR / push 到 `backend/`、`frontend/` 时跑：

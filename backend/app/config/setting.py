@@ -105,18 +105,6 @@ class Settings(BaseSettings):
     OPENALEX_API_KEY: Optional[str] = None
     EXA_API_KEY: Optional[str] = None
 
-    # Web Search 配置（Tavily API）
-    TAVILY_API_KEY: Optional[str] = None
-    SEARCH_CACHE_TTL: int = 86400  # 搜索缓存过期时间（秒）
-    SEARCH_ENABLED: bool = False
-
-    # RAG 知识库配置
-    RAG_ENABLED: bool = False
-    RAG_DB_PATH: str = "data/chromadb"
-    RAG_TOP_K: int = 5
-    RAG_EMBEDDING_MODEL: str = "BAAI/bge-m3"
-    RAG_RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
-
     # 人工检查点开关（沿用上游键名，二期真实生效）
     HIL_TIMEOUT: int = 300  # 审批超时提示时间（秒）；无响应仍永久等待，绝不自动放行
     HIL_CHECKPOINTS: dict = {
