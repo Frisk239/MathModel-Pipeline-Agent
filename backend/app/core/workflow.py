@@ -30,6 +30,7 @@ from app.core.quality.g2_code_gate import (
 )
 from app.core.quality.g4_final_review import run_g4_final_review, run_g4_recheck
 from app.tools.interpreter_factory import create_interpreter
+from app.tools.env_capability import get_capability_description
 from app.services.redis_manager import redis_manager
 from app.tools.notebook_serializer import NotebookSerializer
 from app.core.flows import Flows
@@ -432,7 +433,14 @@ class MathModelWorkFlow(WorkFlow):
             cancel_event=self.cancel_event,
         )
 
-        modeler_response = await modeler_agent.run(coordinator_response)
+        # v3/F2：注入实测环境能力清单，方案承诺的求解器必须限制在清单内（灭求解器幻觉）
+        env_capability_text = get_capability_description(
+            "remote" if settings.E2B_API_KEY else "local"
+        )
+
+        modeler_response = await modeler_agent.run(
+            coordinator_response, env_capability=env_capability_text
+        )
 
         # 检查点②：建模方案人工审批（带 AI 预审参谋，advisory 不替人决策）
         review_llm = llm_factory.get_review_llm()
@@ -455,7 +463,9 @@ class MathModelWorkFlow(WorkFlow):
                         "content": f"【人工审批意见，请据此修订建模方案】\n{feedback}",
                     }
                 )
-                modeler_response = await modeler_agent.run(coordinator_response)
+                modeler_response = await modeler_agent.run(
+                    coordinator_response, env_capability=env_capability_text
+                )
 
             await self._run_checkpoint(
                 "model_review",
@@ -533,7 +543,7 @@ class MathModelWorkFlow(WorkFlow):
             cancel_event=self.cancel_event,
         )
 
-        flows = Flows(self.questions)
+        flows = Flows(self.questions, env_capability=env_capability_text)
 
         ################################################ solution steps
         solution_flows = flows.get_solution_flows(self.questions, modeler_response)

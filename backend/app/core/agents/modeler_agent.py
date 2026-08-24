@@ -65,11 +65,16 @@ class ModelerAgent(Agent):
         super().__init__(task_id, model, context_window, cancel_event=cancel_event)
         self.system_prompt = MODELER_PROMPT
 
-    async def run(self, coordinator_to_modeler: CoordinatorToModeler) -> ModelerToCoder:  # type: ignore[reportIncompatibleMethodOverride]
+    async def run(
+        self,
+        coordinator_to_modeler: CoordinatorToModeler,
+        env_capability: str | None = None,
+    ) -> ModelerToCoder:  # type: ignore[reportIncompatibleMethodOverride]
         """根据协调者拆解的问题生成建模方案。
 
         Args:
             coordinator_to_modeler: 协调者传递的结构化问题信息。
+            env_capability: 执行环境能力清单（v3/F2：方案承诺须限制在清单内），非空时注入。
 
         Returns:
             ModelerToCoder 对象，包含各问题的建模解决方案。
@@ -83,6 +88,10 @@ class ModelerAgent(Agent):
                 "content": json.dumps(coordinator_to_modeler.questions),
             }
         )
+        if env_capability:
+            await self.append_chat_history(
+                {"role": "user", "content": env_capability}
+            )
 
         attempt = 0
         while attempt < MAX_JSON_RETRIES:

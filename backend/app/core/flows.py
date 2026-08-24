@@ -7,9 +7,15 @@ from app.core.agents.modeler_agent import ModelerToCoder
 
 class Flows:
     """管理数学建模任务的求解流程和写作流程。"""
-    def __init__(self, questions: dict[str, str | int]):
+    def __init__(
+        self,
+        questions: dict[str, str | int],
+        env_capability: str | None = None,
+    ):
         self.flows: dict[str, dict] = {}
         self.questions: dict[str, str | int] = questions
+        # v3/F2：执行环境能力清单，拼入各 coder_prompt，代码只能使用清单内可用库
+        self.env_capability = (env_capability or "").strip()
 
     def set_flows(self, ques_count: int):
         """根据问题数量设置流程节点。
@@ -49,10 +55,11 @@ class Flows:
             if key.startswith("ques") and key != "ques_count"
         }
         solutions = modeler_response.questions_solution
+        env_block = f"\n{self.env_capability}\n" if self.env_capability else ""
         ques_flow = {
             key: {
                 "coder_prompt": f"""
-                        参考建模手给出的解决方案{solutions.get(key, "")}
+                        {env_block}参考建模手给出的解决方案{solutions.get(key, "")}
                         完成如下问题{value}
                     """,
             }
@@ -61,14 +68,14 @@ class Flows:
         flows = {
             "eda": {
                 "coder_prompt": f"""
-                        参考建模手给出的解决方案{solutions.get("eda", "对数据进行探索性分析")}
+                        {env_block}参考建模手给出的解决方案{solutions.get("eda", "对数据进行探索性分析")}
                         对当前目录下数据进行EDA分析(数据清洗,可视化),清洗后的数据保存当前目录下,**不需要复杂的模型**
                     """,
             },
             **ques_flow,
             "sensitivity_analysis": {
                 "coder_prompt": f"""
-                        参考建模手给出的解决方案{solutions.get("sensitivity_analysis", "对模型进行灵敏度分析")}
+                        {env_block}参考建模手给出的解决方案{solutions.get("sensitivity_analysis", "对模型进行灵敏度分析")}
                         完成敏感性分析
                     """,
             },
