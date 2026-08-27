@@ -21,6 +21,7 @@ from app.core.quality.contracts import (
 )
 from app.core.quality.recompute import (
     RecomputeStatus,
+    df_n_consistency,
     grim_mean_check,
     numeric_conservation,
     pvalue_recompute,
@@ -71,14 +72,25 @@ G4_RECHECK_PROMPT = """你是修订核验员。先前终审给出以下问题清
 {revised}"""
 
 
+# 声明总样本量的明确形式（宁缺毋滥：只认大写 N = <整数>；多个不同值时口径存疑，放弃）
+_STATED_N_RE = re.compile(r"(?<![A-Za-z0-9_])N\s*=\s*(\d+)(?![A-Za-z0-9_])")
+
+
+def _stated_n(paper_text: str) -> int | None:
+    """提取全文唯一的总样本量声明；无或多值返回 None。"""
+    ns = {int(m.group(1)) for m in _STATED_N_RE.finditer(paper_text)}
+    return ns.pop() if len(ns) == 1 else None
+
+
 def run_g4_mechanical_recompute(paper_text: str) -> list[RoadmapItem]:
     """确定性算术验证：GRIM 均值可达性 + t/F/χ² p 值重算（无 LLM 参与）。
 
     提取不到可重算的统计陈述（数学建模论文常见）时返回空列表——
     不惩罚；mismatch 视为 critical must_fix（数值不可复算是硬伤）。
     """
+    claims = list(scan_statistical_claims(paper_text))
     items: list[RoadmapItem] = []
-    for i, claim in enumerate(scan_statistical_claims(paper_text), 1):
+    for i, claim in enumerate(claims, 1):
         if claim.kind == "grim_mean":
             result = grim_mean_check(claim.values["mean"], claim.values["n"])
             label = "GRIM 均值可达性"
@@ -104,6 +116,38 @@ def run_g4_mechanical_recompute(paper_text: str) -> list[RoadmapItem]:
                 target="论文正文",
             )
         )
+
+    # df↔N 一致性观察项：t 检验的配对/独立身份无法从文本判定（df+1 与 df+2
+    # 两种隐含 N），仅当两种身份都对不上声明 N 时记录；severity=MINOR +
+    # CONSIDER，留痕不拦截，避免口径误判触发无意义修复循环
+    stated_n = _stated_n(paper_text)
+    if stated_n:
+        for i, claim in enumerate(claims, 1):
+            if claim.kind != "t_test":
+                continue
+            df = claim.values["df"]
+            checks = (
+                df_n_consistency(df, stated_n, "n_minus_1"),
+                df_n_consistency(df, stated_n, "n1_plus_n2_minus_2"),
+            )
+            if any(c.status == RecomputeStatus.CONSISTENT for c in checks):
+                continue
+            if all(c.status == RecomputeStatus.MISMATCH for c in checks):
+                items.append(
+                    RoadmapItem(
+                        id=f"g4-df-n-{i}",
+                        problem=(
+                            f"〔df↔N 一致性〕「{claim.snippet}」自由度隐含 "
+                            f"N={df + 1}/{df + 2}，与声明 N={stated_n} 均不符"
+                        ),
+                        evidence_anchor=claim.snippet,
+                        severity=Severity.MINOR,
+                        obligation=Obligation.CONSIDER,
+                        cost_scope="sentence",
+                        acceptance_criteria="核对样本量口径（总样本/组内）与 t 检验自由度，修正不一致处",
+                        target="论文正文",
+                    )
+                )
     return items
 
 

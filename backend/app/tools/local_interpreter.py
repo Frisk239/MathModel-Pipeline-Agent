@@ -240,12 +240,14 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                     if "image/jpeg" in iopub_msg["content"]["data"]:
                         output = iopub_msg["content"]["data"]["image/jpeg"]
                         all_output.append(("display_jpeg", output))
-            elif iopub_msg["msg_type"] == "error":
+            elif (
+                iopub_msg["msg_type"] == "error"
+                and "traceback" in iopub_msg["content"]
+            ):
                 # TODO: 正确返回格式
-                if "traceback" in iopub_msg["content"]:
-                    output = "\n".join(iopub_msg["content"]["traceback"])
-                    cleaned_output = self.delete_color_control_char(output)
-                    all_output.append(("error", cleaned_output))
+                output = "\n".join(iopub_msg["content"]["traceback"])
+                cleaned_output = self.delete_color_control_char(output)
+                all_output.append(("error", cleaned_output))
         return all_output
 
     def _recover_dead_kernel(self) -> None:

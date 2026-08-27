@@ -1,6 +1,7 @@
 """工具基类模块，提供工具注册和调用的基础设施。"""
 
-from typing import Dict, Any, List, Callable
+from typing import Any
+from collections.abc import Callable
 import inspect
 from app.schemas.tool_result import ToolResult
 
@@ -8,8 +9,8 @@ from app.schemas.tool_result import ToolResult
 def tool(
     name: str,
     description: str,
-    parameters: Dict[str, Dict[str, Any]],
-    required: List[str],
+    parameters: dict[str, dict[str, Any]],
+    required: list[str],
 ) -> Callable:
     """工具注册装饰器，为函数生成工具 schema。
 
@@ -57,7 +58,7 @@ class BaseTool:
         pass
         self._tools_cache = None
 
-    def get_tools(self) -> List[Dict[str, Any]]:
+    def get_tools(self) -> list[dict[str, Any]]:
         """获取所有已注册的工具 schema 列表。"""
         if self._tools_cache is not None:
             return self._tools_cache

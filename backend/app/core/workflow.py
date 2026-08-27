@@ -807,7 +807,7 @@ class MathModelWorkFlow(WorkFlow):
                     self.g2_leftover_items.extend(g2_report.items)
                     break
                 if decision.action == "reject":
-                    raise asyncio.CancelledError("人工中止（G2 轮次耗尽）")
+                    raise asyncio.CancelledError("人工中止（G2 轮次耗尽）") from None
                 # revise：人工授权追加一轮（记录绕过 cap 的授权）
                 self.state.repair_rounds["g2"] = (
                     self.state.repair_used("g2") + 1

@@ -1,7 +1,7 @@
 """LLM Provider 抽象基类。"""
 
 from abc import ABC, abstractmethod
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 import httpx
 

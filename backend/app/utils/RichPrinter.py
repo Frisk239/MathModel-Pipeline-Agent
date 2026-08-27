@@ -4,7 +4,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from typing import Optional, List, Any, Dict
+from typing import Optional, Any
 from rich import print as rprint
 from app.utils.log_util import logger
 
@@ -83,7 +83,7 @@ class RichPrinter:
         color: Optional[str] = None,
         emoji: Optional[str] = None,
         prefix: Optional[str] = None,
-        panel_kwargs: Optional[Dict] = None,
+        panel_kwargs: Optional[dict] = None,
     ):
         """通用带面板样式的打印方法"""
         text = cls._format_message(message, style_type, color, emoji, prefix)
@@ -98,16 +98,16 @@ class RichPrinter:
     @classmethod
     def table(
         cls,
-        headers: List[str],
-        rows: List[List[Any]],
+        headers: list[str],
+        rows: list[list[Any]],
         title: str = "数据表格",
-        column_styles: Optional[List[str]] = None,
+        column_styles: Optional[list[str]] = None,
     ):
         """快速打印表格"""
         table = Table(title=title, show_header=True, header_style="bold cyan")
         column_styles = column_styles or ["magenta"] * len(headers)
 
-        for header, style in zip(headers, column_styles):
+        for header, style in zip(headers, column_styles, strict=False):
             table.add_column(header, style=style)
 
         for row in rows:

@@ -4,6 +4,7 @@ from typing import Any
 from app.utils.common_utils import transform_link, split_footnotes
 from app.utils.log_util import logger
 import asyncio
+import contextlib
 import time
 from app.schemas.response import (
     CoderMessage,
@@ -156,11 +157,9 @@ class LLM:
 
         # 流式增量节流推送（100ms 合帧 + 尾部 flush + done）：
         # token 级 delta 直接发布会淹没 0.1s 轮询转发的 WS 通道
-        stream_agent_type = None
-        try:
+        # G2Review 等非流水线角色不推流式
+        with contextlib.suppress(ValueError):
             stream_agent_type = AgentType(agent_name)
-        except ValueError:
-            pass  # G2Review 等非流水线角色不推流式
         pending: dict[str, list[str]] = {"thinking": [], "text": []}
         last_flush = time.monotonic()
 

@@ -302,7 +302,7 @@ class TestAnthropicStreamDelta:
                 try:
                     return next(self._iter)
                 except StopIteration:
-                    raise StopAsyncIteration
+                    raise StopAsyncIteration from None
 
             async def __aenter__(self):
                 return self

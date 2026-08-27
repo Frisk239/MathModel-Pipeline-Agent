@@ -142,7 +142,7 @@ def load_markdown(path: str) -> str:
     Args:
         path: Markdown 文件路径。
     """
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return f.read()
 
 

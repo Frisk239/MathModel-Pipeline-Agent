@@ -1,7 +1,7 @@
 """OpenAlex 学术文献搜索模块。"""
 
 import requests
-from typing import List, Dict, Any
+from typing import Any
 from app.services.redis_manager import redis_manager
 from app.schemas.response import ScholarMessage
 
@@ -32,7 +32,7 @@ class OpenAlexScholar:
             endpoint = endpoint[1:]
         return f"{self.base_url}/{endpoint}"
 
-    def _get_abstract_from_index(self, abstract_inverted_index: Dict) -> str:
+    def _get_abstract_from_index(self, abstract_inverted_index: dict) -> str:
         """从abstract_inverted_index中重建摘要文本
 
         Args:
@@ -60,7 +60,7 @@ class OpenAlexScholar:
         # 拼接单词形成文本
         return " ".join(words).strip()
 
-    async def search_papers(self, query: str, limit: int = 8) -> List[Dict[str, Any]]:
+    async def search_papers(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
         """使用 OpenAlex API 搜索学术论文。
 
         Args:
@@ -174,7 +174,7 @@ class OpenAlexScholar:
 
         return papers
 
-    def papers_to_str(self, papers: List[Dict[str, Any]]) -> str:
+    def papers_to_str(self, papers: list[dict[str, Any]]) -> str:
         """将文献列表转换为可读字符串。"""
         result = ""
         for paper in papers:
@@ -190,7 +190,7 @@ class OpenAlexScholar:
             result += "=" * 80
         return result
 
-    def _format_citation(self, work: Dict[str, Any]) -> str:
+    def _format_citation(self, work: dict[str, Any]) -> str:
         """将论文数据格式化为引用字符串。"""
         # 获取所有作者
         authors = [
@@ -200,10 +200,9 @@ class OpenAlexScholar:
         ]
 
         # 格式化作者列表
-        if len(authors) > 3:
-            authors_str = f"{authors[0]} et al."
-        else:
-            authors_str = ", ".join(authors)
+        authors_str = (
+            f"{authors[0]} et al." if len(authors) > 3 else ", ".join(authors)
+        )
 
         # 获取标题
         title = work.get("display_name") or work.get("title", "")
