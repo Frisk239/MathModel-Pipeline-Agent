@@ -227,7 +227,6 @@ const handleSubmit = async () => {
               <SelectGroup>
                 <SelectLabel>模板</SelectLabel>
                 <SelectItem value="国赛">国赛</SelectItem>
-                <SelectItem value="美赛">美赛</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>

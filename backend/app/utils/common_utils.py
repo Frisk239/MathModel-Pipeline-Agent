@@ -113,7 +113,7 @@ def get_work_dir(task_id: str) -> str:
 
 # TODO: 是不是应该将 Prompt 写成一个 class
 def get_config_template(comp_template: CompTemplate = CompTemplate.CHINA) -> dict:
-    """获取论文模板配置。
+    """获取论文模板配置（美赛模板下架后仅国赛一种）。
 
     Args:
         comp_template: 竞赛模板类型。
@@ -121,9 +121,7 @@ def get_config_template(comp_template: CompTemplate = CompTemplate.CHINA) -> dic
     Returns:
         模板配置字典。
     """
-    if comp_template == CompTemplate.CHINA:
-        return load_toml(os.path.join("app", "config", "md_template.toml"))
-    return {}
+    return load_toml(os.path.join("app", "config", "md_template.toml"))
 
 
 def load_toml(path: str) -> dict:
