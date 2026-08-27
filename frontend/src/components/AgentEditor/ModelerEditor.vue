@@ -79,9 +79,9 @@ const questionsList = computed(() => {
 <template>
   <div class="h-full flex flex-col p-4">
     <!-- 上半部分：CoordinatorMessage 结构化信息 -->
-    <div class="h-1/2 mb-4 bg-white rounded-lg border shadow-sm">
+    <div class="h-1/2 mb-4 bg-card rounded-lg border shadow-sm">
       <div class="border-b px-4 py-3">
-        <h2 class="text-lg font-semibold text-gray-900">题目信息</h2>
+        <h2 class="text-lg font-semibold text-foreground">题目信息</h2>
       </div>
       <div class="h-full pb-14">
         <ScrollArea class="h-full">
@@ -89,8 +89,8 @@ const questionsList = computed(() => {
             <div v-if="coordinatorData">
               <!-- 题目标题 -->
               <div class="space-y-2">
-                <h3 class="text-base font-medium text-gray-700">题目标题</h3>
-                <div class="text-lg font-semibold text-gray-900">
+                <h3 class="text-base font-medium text-muted-foreground">题目标题</h3>
+                <div class="text-lg font-semibold text-foreground">
                   {{ coordinatorData.title }}
                 </div>
               </div>
@@ -99,8 +99,8 @@ const questionsList = computed(() => {
 
               <!-- 题目背景 -->
               <div class="space-y-2">
-                <h3 class="text-base font-medium text-gray-700">题目背景</h3>
-                <div class="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">
+                <h3 class="text-base font-medium text-muted-foreground">题目背景</h3>
+                <div class="text-sm text-foreground leading-relaxed whitespace-pre-wrap">
                   {{ coordinatorData.background }}
                 </div>
               </div>
@@ -110,17 +110,17 @@ const questionsList = computed(() => {
               <!-- 问题数量和问题列表 -->
               <div class="space-y-2">
                 <div class="flex items-center gap-2">
-                  <h3 class="text-base font-medium text-gray-700">问题列表</h3>
-                  <span class="px-2 py-1 text-xs bg-gray-100 rounded">{{ coordinatorData.ques_count }} 个问题</span>
+                  <h3 class="text-base font-medium text-muted-foreground">问题列表</h3>
+                  <span class="px-2 py-1 text-xs bg-muted text-muted-foreground rounded">{{ coordinatorData.ques_count }} 个问题</span>
                 </div>
 
                 <div class="space-y-3">
                   <div v-for="question in questionsList" :key="question.number"
-                    class="border-l-4 border-blue-500 pl-4 py-2 bg-blue-50 rounded-r">
-                    <div class="text-sm font-medium text-blue-700 mb-1">
+                    class="border-l-2 border-primary/60 pl-3 py-2 bg-muted/50 rounded-r-md">
+                    <div class="text-sm font-medium text-primary mb-1">
                       问题 {{ question.number }}
                     </div>
-                    <div class="text-sm text-gray-800 leading-relaxed">
+                    <div class="text-sm text-foreground leading-relaxed">
                       {{ question.content }}
                     </div>
                   </div>
@@ -128,7 +128,7 @@ const questionsList = computed(() => {
               </div>
             </div>
 
-            <div v-else class="flex items-center justify-center h-32 text-gray-500">
+            <div v-else class="flex items-center justify-center h-32 text-muted-foreground">
               暂无题目信息
             </div>
           </div>
@@ -137,9 +137,9 @@ const questionsList = computed(() => {
     </div>
 
     <!-- 下半部分：ModelerMessage 建模手册 -->
-    <div class="h-1/2 bg-white rounded-lg border shadow-sm">
+    <div class="h-1/2 bg-card rounded-lg border shadow-sm">
       <div class="border-b px-4 py-3">
-        <h2 class="text-lg font-semibold text-gray-900">建模手册</h2>
+        <h2 class="text-lg font-semibold text-foreground">建模手册</h2>
       </div>
       <div class="h-full pb-14">
         <ScrollArea class="h-full">
@@ -147,11 +147,11 @@ const questionsList = computed(() => {
             <div v-if="modelerData" class="space-y-4">
               <!-- EDA部分 -->
               <div v-if="modelerData.eda" class="space-y-2">
-                <h3 class="text-base font-medium text-gray-700 flex items-center gap-2">
-                  <span class="px-2 py-1 text-xs bg-gray-200 border rounded">EDA</span>
+                <h3 class="text-base font-medium text-muted-foreground flex items-center gap-2">
+                  <span class="px-2 py-1 text-xs bg-muted border text-muted-foreground rounded">EDA</span>
                   探索性数据分析
                 </h3>
-                <div class="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap bg-gray-50 p-3 rounded">
+                <div class="text-sm text-foreground leading-relaxed whitespace-pre-wrap bg-muted/50 p-3 rounded">
                   {{ modelerData.eda }}
                 </div>
               </div>
@@ -159,12 +159,12 @@ const questionsList = computed(() => {
               <!-- 问题解决方案 -->
               <div v-for="question in questionsList" :key="`solution-${question.number}`" class="space-y-2">
                 <div v-if="modelerData[`ques${question.number}`]">
-                  <h3 class="text-base font-medium text-gray-700 flex items-center gap-2">
-                    <span class="px-2 py-1 text-xs bg-gray-200 border rounded">问题{{ question.number }}</span>
+                  <h3 class="text-base font-medium text-muted-foreground flex items-center gap-2">
+                    <span class="px-2 py-1 text-xs bg-muted border text-muted-foreground rounded">问题{{ question.number }}</span>
                     解决方案
                   </h3>
                   <div
-                    class="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap bg-green-50 p-3 rounded border-l-4 border-green-500">
+                    class="text-sm text-foreground leading-relaxed whitespace-pre-wrap bg-muted/50 p-3 rounded border-l-2 border-primary/60">
                     {{ modelerData[`ques${question.number}`] }}
                   </div>
                 </div>
@@ -172,17 +172,17 @@ const questionsList = computed(() => {
 
               <!-- 敏感性分析 -->
               <div v-if="modelerData.sensitivity_analysis" class="space-y-2">
-                <h3 class="text-base font-medium text-gray-700 flex items-center gap-2">
-                  <span class="px-2 py-1 text-xs bg-gray-200 border rounded">敏感性分析</span>
+                <h3 class="text-base font-medium text-muted-foreground flex items-center gap-2">
+                  <span class="px-2 py-1 text-xs bg-muted border text-muted-foreground rounded">敏感性分析</span>
                 </h3>
                 <div
-                  class="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap bg-orange-50 p-3 rounded border-l-4 border-orange-500">
+                  class="text-sm text-foreground leading-relaxed whitespace-pre-wrap bg-muted/50 p-3 rounded border-l-2 border-primary/60">
                   {{ modelerData.sensitivity_analysis }}
                 </div>
               </div>
             </div>
 
-            <div v-else class="flex items-center justify-center h-32 text-gray-500">
+            <div v-else class="flex items-center justify-center h-32 text-muted-foreground">
               暂无建模手册信息
             </div>
           </div>

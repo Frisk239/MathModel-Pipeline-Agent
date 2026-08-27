@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AgentType } from "@/utils/enum";
 import { renderMarkdown } from "@/utils/markdown";
+import { agentMetaOf } from "@/utils/agentMeta";
 import { Brain, ChevronDown, LoaderCircle } from "lucide-vue-next";
 import { computed, ref, watch } from "vue";
 
@@ -39,20 +40,7 @@ watch(
 	{ immediate: true },
 );
 
-const agentMeta = computed(() => {
-	switch (props.agentType) {
-		case "CoderAgent":
-			return { emoji: "👨‍💻", label: "代码手" };
-		case "WriterAgent":
-			return { emoji: "✍️", label: "论文手" };
-		case "ModelerAgent":
-			return { emoji: "🧮", label: "建模手" };
-		case "CoordinatorAgent":
-			return { emoji: "🧭", label: "协调者" };
-		default:
-			return { emoji: "🤖", label: "Agent" };
-	}
-});
+const agentMeta = computed(() => agentMetaOf(props.agentType));
 
 watch(
 	() => [props.thinking, props.text],
@@ -78,7 +66,7 @@ watch(
   <div class="mb-3 flex w-full flex-col gap-1">
     <!-- 头像行 -->
     <div class="flex items-center gap-1.5 select-none">
-      <span class="text-base leading-none">{{ agentMeta.emoji }}</span>
+      <component :is="agentMeta.icon" class="h-3.5 w-3.5 text-muted-foreground" />
       <span class="text-xs font-medium text-muted-foreground">{{ agentMeta.label }}</span>
     </div>
 

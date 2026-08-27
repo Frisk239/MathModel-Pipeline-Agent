@@ -62,7 +62,28 @@ module.exports = {
   			}
   		},
   		fontFamily: {
-  			sans: ['ui-sans-serif', 'system-ui', '"Segoe UI"', 'sans-serif'],
+  			sans: [
+  				'ui-sans-serif',
+  				'system-ui',
+  				'"Segoe UI"',
+  				'"PingFang SC"',
+  				'"Hiragino Sans GB"',
+  				'"Microsoft YaHei"',
+  				'"Noto Sans SC"',
+  				'sans-serif'
+  			],
+  			// 等宽栈禁裸 monospace：Windows 中文会退化成宋体（CJK 兜底必须进栈）
+  			mono: [
+  				'"SF Mono"',
+  				'"JetBrains Mono"',
+  				'"Fira Code"',
+  				'Consolas',
+  				'"Liberation Mono"',
+  				'Menlo',
+  				'Courier',
+  				'"PingFang SC"',
+  				'"Microsoft YaHei"'
+  			]
   		},
   	}
   },

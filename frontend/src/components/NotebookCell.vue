@@ -71,19 +71,15 @@ const isResultCell = (cell: NoteCell): cell is ResultCell => {
 
 <template>
   <div :class="[
-    'bg-white rounded-lg shadow-sm overflow-hidden',
-    'border border-gray-200 hover:border-blue-300',
+    'bg-card rounded-lg overflow-hidden',
+    'border border-black/5 dark:border-white/10',
     cell.type === 'code' ? 'code-cell' : 'result-cell'
   ]">
     <!-- 单元格头部 -->
-    <div
-      class="px-3 py-1 flex items-center justify-between bg-gradient-to-r from-gray-50 to-white border-b border-gray-200">
+    <div class="px-3 py-1 flex items-center justify-between bg-muted/60 border-b border-black/5 dark:border-white/10">
       <div class="flex items-center space-x-2">
-        <span :class="[
-          'px-2 py-1 rounded text-xs font-medium',
-          cell.type === 'code' ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'
-        ]">
-          {{ cell.type === 'code' ? 'Code' : 'Result' }}
+        <span class="px-2 py-0.5 rounded text-xs font-medium bg-background text-muted-foreground border border-black/5 dark:border-white/10">
+          {{ cell.type === 'code' ? '代码' : '输出' }}
         </span>
       </div>
     </div>
@@ -99,7 +95,7 @@ const isResultCell = (cell: NoteCell): cell is ResultCell => {
 
       <!-- 结果单元格 -->
       <template v-else-if="isResultCell(cell)">
-        <div class="px-4 py-3 bg-gray-50">
+        <div class="px-4 py-3 bg-muted/30">
           <div class="text-xs font-medium text-gray-500 mb-2">输出:</div>
           
           <!-- 遍历所有执行结果 -->
