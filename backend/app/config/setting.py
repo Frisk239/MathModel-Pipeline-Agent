@@ -119,7 +119,6 @@ class Settings(BaseSettings):
     LLM_READ_TIMEOUT: float = 180.0  # seconds; stream idle gap (zen hold)
     E2B_API_KEY: Optional[str] = None
     LOG_LEVEL: str = "DEBUG"
-    DEBUG: bool = True
     REDIS_URL: str = "redis://redis:6379/0"
     REDIS_MAX_CONNECTIONS: int = 10
     CORS_ALLOW_ORIGINS: Annotated[list[str] | str, BeforeValidator(parse_cors)] = "*"
@@ -144,7 +143,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env.dev",
         env_file_encoding="utf-8",
-        extra="allow",
+        extra="forbid",  # 拼错/多余的配置键启动即报错，不静默通过
         validate_assignment=True,
     )
 

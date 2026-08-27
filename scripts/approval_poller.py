@@ -8,7 +8,7 @@ import time
 import requests
 
 tid = sys.argv[1]
-BASE = os.environ.get("BACKEND_BASE_URL", "http://localhost:8001")
+BASE = os.environ.get("BACKEND_BASE_URL", "http://localhost:8000")
 deadline = time.time() + 50 * 60
 while time.time() < deadline:
     time.sleep(8)
