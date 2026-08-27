@@ -4,6 +4,7 @@ import CoderEditor from "@/components/AgentEditor/CoderEditor.vue";
 import ModelerEditor from "@/components/AgentEditor/ModelerEditor.vue";
 import WriterEditor from "@/components/AgentEditor/WriterEditor.vue";
 import ChatArea from "@/components/ChatArea.vue";
+import StatsLine from "@/components/StatsLine.vue";
 import { Button } from "@/components/ui/button";
 import {
 	ResizableHandle,
@@ -120,8 +121,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="fixed inset-0">
-    <ResizablePanelGroup direction="horizontal" class="h-full">
+  <div class="fixed inset-0 flex flex-col">
+    <ResizablePanelGroup direction="horizontal" class="min-h-0 flex-1">
       <ResizablePanel :default-size="40" class="h-full">
         <ChatArea :messages="taskStore.chatMessages" :streaming="taskStore.streaming" />
       </ResizablePanel>
@@ -188,5 +189,7 @@ onBeforeUnmount(() => {
         </div>
       </ResizablePanel>
     </ResizablePanelGroup>
+    <!-- 底部统计行：Agent 数 / LLM 耗时 · 首token · tok/s / 输入输出 token -->
+    <StatsLine :messages="taskStore.messages" />
   </div>
 </template>

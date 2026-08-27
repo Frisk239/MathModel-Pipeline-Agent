@@ -26,16 +26,60 @@ const lastLine = computed(() => {
 	return lines[lines.length - 1] ?? "";
 });
 
-/** 正文富文本渲染（与终稿 Bubble 同一渲染器，流式期间高频重解析量级可忽略） */
-const renderedText = ref("");
+/** 正文富文本渲染：增量冻结解析——已完成块缓存 HTML，仅重解析尾部块。
+ *  流式高频 delta 下避免全量 markdown 重解析；块边界只在 fenced code
+ *  闭合处生效（``` 计数为偶），防止把代码块从中间劈开冻结成怪 HTML。 */
+const FROZEN_TAIL_BLOCKS = 2;
+
+function countFences(s: string): number {
+	return (s.match(/^\s*(?:```|~~~)/gm) ?? []).length;
+}
+
+function splitBlocks(text: string): string[] {
+	const parts = text.split(/\n\n+/);
+	const blocks: string[] = [];
+	let pending: string | null = null;
+	let fences = 0;
+	for (const part of parts) {
+		const c = countFences(part);
+		if (pending !== null && fences % 2 !== 0) {
+			// 上一段落在未闭合代码块内：边界无效，续接到同一块
+			pending = `${pending}\n\n${part}`;
+			fences += c;
+			continue;
+		}
+		if (pending !== null) blocks.push(pending);
+		pending = part;
+		fences = c;
+	}
+	if (pending !== null) blocks.push(pending);
+	return blocks;
+}
+
+const frozenHtml = ref("");
+const frozenBlocks = ref(0);
+const tailHtml = ref("");
+
+const renderedText = computed(() => frozenHtml.value + tailHtml.value);
+
 watch(
 	() => props.text,
 	async (text) => {
 		if (!text) {
-			renderedText.value = "";
+			frozenHtml.value = "";
+			frozenBlocks.value = 0;
+			tailHtml.value = "";
 			return;
 		}
-		renderedText.value = await renderMarkdown(text);
+		const blocks = splitBlocks(text);
+		const freezable = Math.max(0, blocks.length - FROZEN_TAIL_BLOCKS);
+		if (freezable > frozenBlocks.value) {
+			const newly = blocks.slice(frozenBlocks.value, freezable).join("\n\n");
+			frozenHtml.value += await renderMarkdown(newly);
+			frozenBlocks.value = freezable;
+		}
+		const tail = blocks.slice(frozenBlocks.value).join("\n\n");
+		tailHtml.value = tail ? await renderMarkdown(tail) : "";
 	},
 	{ immediate: true },
 );

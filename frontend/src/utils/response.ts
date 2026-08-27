@@ -33,9 +33,18 @@ export interface UserMessage extends BaseMessage {
 }
 
 /** Agent 消息基类 */
+/** LLM 调用用量与耗时（终稿消息附带；旧消息无此字段） */
+export interface LLMUsage {
+	prompt_tokens: number;
+	completion_tokens: number;
+	latency_ms: number;
+	first_token_ms: number;
+}
+
 export interface AgentMessage extends BaseMessage {
 	msg_type: "agent";
 	agent_type: AgentType;
+	usage?: LLMUsage;
 }
 
 /** 建模手消息 */

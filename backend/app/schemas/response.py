@@ -32,6 +32,8 @@ class UserMessage(Message):
 class AgentMessage(Message):
     msg_type: Literal["system", "agent", "user", "tool"] = "agent"  # type: ignore[assignment]
     agent_type: AgentType  # CoordinatorAgent | ModelerAgent | CoderAgent | WriterAgent
+    # 本次 LLM 调用的用量与耗时（StatsLine 统计数据源；旧消息无此字段）
+    usage: dict | None = None
 
 
 class ModelerMessage(AgentMessage):

@@ -306,9 +306,13 @@ function isStreamDelta(payload: Message): payload is StreamDeltaMessage {
 			if (msg.msg_type === "system") {
 				return true;
 			}
-			// if (msg.msg_type === 'tool' && msg.tool_name === 'execute_code') {
-			// return true
-			// }
+			// 代码执行两拍消息进时间线（ChatArea 内配对为 ToolRow 四态卡）
+			if (
+				msg.msg_type === "tool" &&
+				msg.tool_name === "execute_code"
+			) {
+				return true;
+			}
 			return false;
 		}),
 	);

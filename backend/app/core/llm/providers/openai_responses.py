@@ -1,5 +1,7 @@
 """OpenAI Responses API Provider。"""
 
+import time
+
 from openai import AsyncOpenAI, BadRequestError
 from app.core.llm.providers.base import (
     BaseProvider,
@@ -47,6 +49,7 @@ class OpenAIResponsesProvider(BaseProvider):
         if reasoning_effort and reasoning_effort != "off":
             kwargs["reasoning"] = {"effort": reasoning_effort}
 
+        t0 = time.monotonic()
         try:
             response = await client.responses.create(**kwargs)
         except BadRequestError:
@@ -54,6 +57,7 @@ class OpenAIResponsesProvider(BaseProvider):
             if "reasoning" not in kwargs:
                 raise
             kwargs.pop("reasoning")
+            t0 = time.monotonic()
             response = await client.responses.create(**kwargs)
 
         content_parts: list[str] = []
@@ -77,6 +81,9 @@ class OpenAIResponsesProvider(BaseProvider):
             prompt_tokens=response.usage.input_tokens if response.usage else 0,
             completion_tokens=response.usage.output_tokens if response.usage else 0,
         )
+        # 非流式协议无首帧概念，首 token 即总耗时
+        usage.latency_ms = round((time.monotonic() - t0) * 1000)
+        usage.first_token_ms = usage.latency_ms
 
         return StandardResponse(content=content, tool_calls=tool_calls, usage=usage)
 

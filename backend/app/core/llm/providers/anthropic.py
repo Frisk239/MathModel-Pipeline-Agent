@@ -2,6 +2,7 @@
 
 import json as _json
 import re
+import time
 
 from anthropic import AsyncAnthropic
 from app.core.llm.providers.base import (
@@ -74,11 +75,15 @@ class AnthropicProvider(BaseProvider):
         # 流式（"Streaming is required for operations that may take longer than
         # 10 minutes"）；流式聚合结果与非流式 Message 同构，且长请求不易被中间层掐断。
         # on_delta 提供时逐事件上抛 thinking/text 增量（过程展示）。
+        t0 = time.monotonic()
+        first_token_ms = 0
         async with client.messages.stream(**kwargs) as stream:
             if on_delta is not None:
                 async for event in stream:
                     if event.type != "content_block_delta":
                         continue
+                    if not first_token_ms:
+                        first_token_ms = round((time.monotonic() - t0) * 1000)
                     delta = getattr(event, "delta", None)
                     delta_type = getattr(delta, "type", "")
                     if delta_type == "thinking_delta":
@@ -115,6 +120,8 @@ class AnthropicProvider(BaseProvider):
             prompt_tokens=response.usage.input_tokens,
             completion_tokens=response.usage.output_tokens,
         )
+        usage.first_token_ms = first_token_ms
+        usage.latency_ms = round((time.monotonic() - t0) * 1000)
 
         return StandardResponse(
             content=content,

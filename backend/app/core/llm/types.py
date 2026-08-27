@@ -14,10 +14,13 @@ class ToolCall:
 
 @dataclass
 class Usage:
-    """Token 用量。"""
+    """Token 用量与耗时（StatsLine 统计数据源）。"""
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # 单次调用总耗时（毫秒）；流式首帧到达时间（非流式等于总耗时）
+    latency_ms: int = 0
+    first_token_ms: int = 0
 
 
 @dataclass

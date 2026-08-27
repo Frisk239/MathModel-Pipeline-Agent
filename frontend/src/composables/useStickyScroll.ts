@@ -1,7 +1,7 @@
 import type { Ref, WatchSource } from "vue";
 import { nextTick, onMounted, ref, watch } from "vue";
 
-const STICKY_THRESHOLD = 40;
+const STICKY_THRESHOLD = 24;
 
 /**
  * 粘底滚动：默认跟踪最新内容，用户上翻暂停，滚回底部恢复。
@@ -37,5 +37,5 @@ export function useStickyScroll(
 
 	onMounted(() => nextTick(scrollToBottom));
 
-	return { onScroll };
+	return { onScroll, isPinnedToBottom, scrollToBottom };
 }

@@ -1,6 +1,7 @@
 """LLM 交互模块，封装大语言模型的调用、重试和消息发送。"""
 
 from typing import Any
+from dataclasses import asdict
 from app.utils.common_utils import transform_link, split_footnotes
 from app.utils.log_util import logger
 import asyncio
@@ -377,20 +378,25 @@ class LLM:
         if content is None:
             return
 
+        # 流水线四角色的终稿带本次调用用量/耗时（前端 StatsLine 统计源）
+        usage_dict = asdict(response.usage) if response.usage else None
+
         agent_msg: Any = None
         match agent_name:
             case AgentType.CODER:
-                agent_msg = CoderMessage(content=content)
+                agent_msg = CoderMessage(content=content, usage=usage_dict)
             case AgentType.WRITER:
                 content, _ = split_footnotes(content)
                 content = transform_link(self.task_id, content)
-                agent_msg = WriterMessage(content=content, sub_title=sub_title)
+                agent_msg = WriterMessage(
+                    content=content, sub_title=sub_title, usage=usage_dict
+                )
             case AgentType.MODELER:
-                agent_msg = ModelerMessage(content=content)
+                agent_msg = ModelerMessage(content=content, usage=usage_dict)
             case AgentType.SYSTEM:
                 agent_msg = SystemMessage(content=content)
             case AgentType.COORDINATOR:
-                agent_msg = CoordinatorMessage(content=content)
+                agent_msg = CoordinatorMessage(content=content, usage=usage_dict)
             case _:
                 # 评审/预审等非流水线角色：降级为系统消息推送，不中断调用
                 agent_msg = SystemMessage(content=content)
