@@ -12,6 +12,8 @@ interface BubbleProps {
 	agentType?: AgentType;
 	class?: HTMLAttributes["class"];
 	content: string;
+	/** 消息时间（HH:mm），Agent 角色行展示 */
+	time?: string;
 }
 
 const props = withDefaults(defineProps<BubbleProps>(), {
@@ -56,6 +58,7 @@ const agentMeta = computed(() => agentMetaOf(props.agentType));
       <div class="flex items-center gap-1.5 select-none">
         <component :is="agentMeta.icon" class="h-3.5 w-3.5 text-muted-foreground" />
         <span class="text-xs font-medium text-muted-foreground">{{ agentMeta.label }}</span>
+        <span v-if="props.time" class="text-[10px] tabular-nums text-muted-foreground/50">{{ props.time }}</span>
       </div>
       <div
         class="prose prose-sm prose-slate max-w-none rounded-xl border border-black/5 bg-muted/60 px-3.5 py-2.5 text-sm shadow-sm dark:border-white/10"
