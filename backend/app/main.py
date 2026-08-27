@@ -4,7 +4,14 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import os
-from app.routers import modeling_router, ws_router, common_router, files_router
+from app.routers import (
+    approval_router,
+    common_router,
+    config_router,
+    files_router,
+    modeling_router,
+    ws_router,
+)
 from app.config.setting import settings
 from app.utils.log_util import logger
 from fastapi.staticfiles import StaticFiles
@@ -66,6 +73,8 @@ app.include_router(modeling_router.router)
 app.include_router(ws_router.router)
 app.include_router(common_router.router)
 app.include_router(files_router.router)
+app.include_router(config_router.router)
+app.include_router(approval_router.router)
 
 
 # 跨域 CORS：来源读配置；"*" 与 allow_credentials=True 互斥（浏览器会拒绝

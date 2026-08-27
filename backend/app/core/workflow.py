@@ -725,97 +725,24 @@ class MathModelWorkFlow(WorkFlow):
             try:
                 round_no = self.state.request_repair("g2")
             except Exception:
-                # v3/P2-5：主因为"方案未实现"（F4 方案过重）且该问未回退过 →
-                # 回退第二候选给 +1 轮，优于带一串 critical 落款降级放行。
-                # 仅 AUTO_MODE 生效：人工模式把决策权留给人（revise 可写"改用候选2"）。
-                if (
-                    settings.AUTO_MODE
-                    and key not in self._g2_fallback_used
-                    and is_plan_fallback_candidate(g2_report.items)
-                ):
-                    self._g2_fallback_used.add(key)
-                    self.state.repair_rounds["g2"] = (
-                        self.state.repair_used("g2") + 1
-                    )
-                    self.state.save()
-                    round_no = self.state.repair_used("g2")
-                    self.state.record_auto_degrade(
-                        "g2_plan_fallback",
-                        f"({key}) 方案超出实现预算（{g2_report.summary}），"
-                        "自动回退建模候选矩阵的第二候选并追加一轮",
-                    )
-                    archived_fb = archive_stale_deliverables(
-                        self.work_dir, round_no, since=subtask_started_at
-                    )
-                    plan_excerpt = str(
-                        ctx.modeler_response.questions_solution.get(key, "")
-                    )[:1500]
-                    roadmap_text = (
-                        "【方案回退指令】原方案在修复轮耗尽后仍无法实现"
-                        f"（门报告：{g2_report.summary}）。判定主因：方案复杂度"
-                        "超出实现预算。要求改用建模方案候选矩阵中的第二候选模型"
-                        "（或更简单的可执行候选）：\n"
-                        "1. 先用最简结构跑通主链路：核心决策变量→目标→关键约束→"
-                        "求解→结果文件写出\n"
-                        "2. 原方案中预算内无法实现的复杂结构（如大M半连续、复杂"
-                        "滚动窗口），要么给出等价简化实现，要么在执行总结中如实"
-                        "记录差异与理由\n"
-                        "3. 环境能力清单仍然有效，求解器只能用清单内可用项\n"
-                        f"【原方案节选】{plan_excerpt}"
-                    )
-                    if archived_fb:
-                        roadmap_text += (
-                            "\n（上轮交付物已归档至 _retry_archive/，禁止读取，"
-                            "本轮必须端到端重新生成）"
-                        )
-                    await redis_manager.publish_message(
-                        self.task_id,
-                        SystemMessage(
-                            content=f"({key}) 方案超预算，自动回退第二候选（+1 轮）",
-                            type="warning",
-                        ),
-                    )
-                    coder_prompt = (
-                        f"{coder_prompt}\n\n{roadmap_text}"
-                    )
+                # v3/P2-5：修复轮耗尽 → 先试方案回退（+1 轮），否则降级/人工决策
+                fallback = await self._g2_plan_fallback(
+                    ctx, key, g2_report, roadmap_text, subtask_started_at
+                )
+                if fallback is not None:
+                    round_no, roadmap_text = fallback
+                    coder_prompt = f"{coder_prompt}\n\n{roadmap_text}"
                     coder_response = await ctx.coder_agent.run(
                         prompt=coder_prompt, subtask_title=key
                     )
                     continue
-                if settings.AUTO_MODE:
-                    # 全自动模式：耗尽自动降级放行（遗留如实记录，与人工决策区分审计）
-                    self.state.record_auto_degrade(
-                        "g2", f"({key}) {g2_report.summary}"
-                    )
-                    self.g2_leftover_items.extend(g2_report.items)
-                    break
-                # 轮次耗尽 → 人工三选一（决策记录在案）
-                # 动作词表与检查点统一：approve=放行 / revise=带意见追加轮 / reject=中止
-                decision = await wait_for_approval(
-                    self.task_id,
-                    self.state,
-                    "g2_exhausted",
-                    {
-                        "title": f"G2 修复轮次耗尽（{key}）",
-                        "report": g2_report.summary,
-                        "roadmap": roadmap_text[:2000],
-                        "options": ["approve", "revise", "reject"],
-                    },
+                action, extra = await self._g2_exhausted_decision(
+                    key, g2_report, roadmap_text
                 )
-                if decision.action == "approve":
-                    # 人工带问题放行：G2 遗留同样写入论文局限性章节（不静默吞掉）
-                    self.g2_leftover_items.extend(g2_report.items)
+                if action == "break":
                     break
-                if decision.action == "reject":
-                    raise asyncio.CancelledError("人工中止（G2 轮次耗尽）") from None
-                # revise：人工授权追加一轮（记录绕过 cap 的授权）
-                self.state.repair_rounds["g2"] = (
-                    self.state.repair_used("g2") + 1
-                )
-                self.state.save()
                 round_no = self.state.repair_used("g2")
-                if decision.feedback:
-                    roadmap_text += f"\n【人工补充意见】{decision.feedback}"
+                roadmap_text += extra
 
             # v3/P2-3：归档本问上轮交付物，防止新一轮读取遗留产物冒充本轮产出
             # （只动 mtime>=subtask_started_at 的本问产物，此前问次的合法产物不动）
@@ -847,6 +774,106 @@ class MathModelWorkFlow(WorkFlow):
                 prompt=coder_prompt, subtask_title=key
             )
         return coder_response
+
+    async def _g2_plan_fallback(
+        self,
+        ctx: "_PipelineContext",
+        key: str,
+        g2_report,
+        roadmap_text: str,
+        subtask_started_at: float,
+    ) -> tuple[int, str] | None:
+        """P2-5 方案回退：主因为"方案未实现"（方案过重）且该问未回退过时，
+        回退第二候选给 +1 轮，优于带一串 critical 落款降级放行。
+
+        仅 AUTO_MODE 生效：人工模式把决策权留给人（revise 可写"改用候选2"）。
+        不满足回退条件返回 None，由调用方走降级/人工分支。
+        """
+        if not (
+            settings.AUTO_MODE
+            and key not in self._g2_fallback_used
+            and is_plan_fallback_candidate(g2_report.items)
+        ):
+            return None
+        self._g2_fallback_used.add(key)
+        self.state.repair_rounds["g2"] = self.state.repair_used("g2") + 1
+        self.state.save()
+        round_no = self.state.repair_used("g2")
+        self.state.record_auto_degrade(
+            "g2_plan_fallback",
+            f"({key}) 方案超出实现预算（{g2_report.summary}），"
+            "自动回退建模候选矩阵的第二候选并追加一轮",
+        )
+        archived_fb = archive_stale_deliverables(
+            self.work_dir, round_no, since=subtask_started_at
+        )
+        plan_excerpt = str(
+            ctx.modeler_response.questions_solution.get(key, "")
+        )[:1500]
+        fallback_text = (
+            "【方案回退指令】原方案在修复轮耗尽后仍无法实现"
+            f"（门报告：{g2_report.summary}）。判定主因：方案复杂度"
+            "超出实现预算。要求改用建模方案候选矩阵中的第二候选模型"
+            "（或更简单的可执行候选）：\n"
+            "1. 先用最简结构跑通主链路：核心决策变量→目标→关键约束→"
+            "求解→结果文件写出\n"
+            "2. 原方案中预算内无法实现的复杂结构（如大M半连续、复杂"
+            "滚动窗口），要么给出等价简化实现，要么在执行总结中如实"
+            "记录差异与理由\n"
+            "3. 环境能力清单仍然有效，求解器只能用清单内可用项\n"
+            f"【原方案节选】{plan_excerpt}"
+        )
+        if archived_fb:
+            fallback_text += (
+                "\n（上轮交付物已归档至 _retry_archive/，禁止读取，"
+                "本轮必须端到端重新生成）"
+            )
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(
+                content=f"({key}) 方案超预算，自动回退第二候选（+1 轮）",
+                type="warning",
+            ),
+        )
+        return round_no, fallback_text
+
+    async def _g2_exhausted_decision(
+        self, key: str, g2_report, roadmap_text: str
+    ) -> tuple[str, str]:
+        """修复轮耗尽处置：AUTO_MODE 降级放行，或人工三分支。
+
+        返回 ("break", "") 放行；("continue", 附加指令) 授权追加一轮；
+        reject 直接抛 CancelledError 中止任务。
+        """
+        if settings.AUTO_MODE:
+            # 全自动模式：耗尽自动降级放行（遗留如实记录，与人工决策区分审计）
+            self.state.record_auto_degrade("g2", f"({key}) {g2_report.summary}")
+            self.g2_leftover_items.extend(g2_report.items)
+            return "break", ""
+        # 轮次耗尽 → 人工三选一（决策记录在案）
+        # 动作词表与检查点统一：approve=放行 / revise=带意见追加轮 / reject=中止
+        decision = await wait_for_approval(
+            self.task_id,
+            self.state,
+            "g2_exhausted",
+            {
+                "title": f"G2 修复轮次耗尽（{key}）",
+                "report": g2_report.summary,
+                "roadmap": roadmap_text[:2000],
+                "options": ["approve", "revise", "reject"],
+            },
+        )
+        if decision.action == "approve":
+            # 人工带问题放行：G2 遗留同样写入论文局限性章节（不静默吞掉）
+            self.g2_leftover_items.extend(g2_report.items)
+            return "break", ""
+        if decision.action == "reject":
+            raise asyncio.CancelledError("人工中止（G2 轮次耗尽）") from None
+        # revise：人工授权追加一轮（记录绕过 cap 的授权）
+        self.state.repair_rounds["g2"] = self.state.repair_used("g2") + 1
+        self.state.save()
+        extra = f"\n【人工补充意见】{decision.feedback}" if decision.feedback else ""
+        return "continue", extra
 
     async def _run_write_steps(self, ctx: "_PipelineContext") -> None:
         """write steps：结论性章节（摘要/评价等）写作。"""
