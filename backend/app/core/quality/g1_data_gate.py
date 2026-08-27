@@ -36,13 +36,20 @@ def extract_required_from_problem(ques_all: str) -> list[str]:
         r"((?:附件|attachment|appendix)\s*[0-9０-９一二三四五六七八九十]+)", re.IGNORECASE
     )
     seen: list[str] = []
+    _SENT_SEP = "。；;！!？?\n"
     for m in pat.finditer(normalized):
         name = m.group(1)
         key = _normalize_for_match(name)
         if key in seen:
             continue
-        context = normalized[m.end() : m.end() + 20].lower()
-        if any(t in context for t in _TEMPLATE_CTX):
+        # 模板词既可能在附件名之后（"附件 3 须提交结果的模板文件"），
+        # 也可能在之前（2024-C 官方题面："模板文件见附件 3"）。
+        # 判定限定在附件名所在句子内，防止跨句窗口误吞相邻句的 result 字样
+        sent_start = max(normalized.rfind(ch, 0, m.start()) for ch in _SENT_SEP) + 1
+        ends = [pos for pos in (normalized.find(ch, m.end()) for ch in _SENT_SEP) if pos != -1]
+        sent_end = min(ends) if ends else len(normalized)
+        sentence = normalized[sent_start:sent_end].lower()
+        if any(t in sentence for t in _TEMPLATE_CTX):
             continue
         seen.append(key)
     return seen
