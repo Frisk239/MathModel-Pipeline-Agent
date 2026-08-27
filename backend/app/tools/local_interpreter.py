@@ -3,9 +3,11 @@
 from app.tools.base_interpreter import BaseCodeInterpreter
 from app.tools.matplotlib_setup import build_matplotlib_init_code
 from app.tools.notebook_serializer import NotebookSerializer
+import asyncio
 import jupyter_client
 from app.utils.log_util import logger
 import os
+import time
 from app.services.redis_manager import redis_manager
 from app.schemas.response import (
     OutputItem,
@@ -13,6 +15,12 @@ from app.schemas.response import (
     StdErrModel,
     SystemMessage,
 )
+
+# 单次执行总时长上限与 interrupt 宽限。MILP 求解可静默运行数分钟无 iopub
+# 输出，不能用"无消息间隔"判死；20260827 活锁事故（kernel 死锁不回 idle，
+# 采码循环无限 continue 并阻塞事件循环）后以总时长 + kernel 存活检测兜底。
+EXECUTE_TOTAL_TIMEOUT = 1800  # 秒：30 分钟，覆盖大 MILP 的正常求解时长
+EXECUTE_INTERRUPT_GRACE = 120  # 秒：interrupt 后等待内核回 idle 的宽限
 
 
 class LocalCodeInterpreter(BaseCodeInterpreter):
@@ -38,7 +46,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         self.km, self.kc = jupyter_client.manager.start_new_kernel(
             kernel_name="python3", env=kernel_env
         )
-        font_msg, font_type = self._pre_execute_code()
+        font_msg, font_type = await asyncio.to_thread(self._pre_execute_code)
         if font_msg:
             await redis_manager.publish_message(
                 self.task_id,
@@ -79,9 +87,10 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
             self.task_id,
             SystemMessage(content="开始执行代码"),
         )
-        # 执行 Python 代码
+        # 执行 Python 代码（放线程池：长求解/挂起期间事件循环与 /status、
+        # 流式推送保持可用，20260827 事故中同步调用曾让后端整体失联 10+ 分钟）
         logger.info("开始在本地执行代码...")
-        execution = self.execute_code_(code)
+        execution = await asyncio.to_thread(self.execute_code_, code)
         logger.info("代码执行完成，开始处理结果...")
 
         await redis_manager.publish_message(
@@ -147,14 +156,45 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
             error_message,
         )
 
-    def execute_code_(self, code) -> list[tuple[str, str]]:
+    def execute_code_(
+        self,
+        code,
+        total_timeout: float | None = None,
+        interrupt_grace: float | None = None,
+    ) -> list[tuple[str, str]]:
         assert self.kc is not None
         assert self.km is not None
+        deadline = time.monotonic() + (total_timeout or EXECUTE_TOTAL_TIMEOUT)
+        grace = interrupt_grace if interrupt_grace is not None else EXECUTE_INTERRUPT_GRACE
         self.kc.execute(code)
         logger.info(f"执行代码: {code}")
         # Get the output of the code
         msg_list = []
+        interrupted = False
+        interrupt_deadline: float | None = None
         while True:
+            now = time.monotonic()
+            if self.km.is_alive() is False:
+                # 内核已崩溃：重启基础设施并报错，交给 Agent 反思回路
+                self._recover_dead_kernel()
+                return [(
+                    "error",
+                    "执行失败：Jupyter 内核已崩溃（无响应）。内核已自动重启，"
+                    "内存中的变量已清空，请基于工作目录中的文件重新加载数据后重试。",
+                )]
+            if not interrupted and (now > deadline or self.interrupt_signal):
+                logger.warning("代码执行超时或收到中断信号，向内核发送 interrupt")
+                self.km.interrupt_kernel()
+                self.interrupt_signal = False
+                interrupted = True
+                interrupt_deadline = now + grace
+            elif interrupted and now > (interrupt_deadline or deadline):
+                self._recover_dead_kernel()
+                return [(
+                    "error",
+                    "执行超时且中断无效（内核疑似死锁）：内核已重启，内存状态已清空。"
+                    "请检查是否存在死循环或不可行的求解规模，缩小问题规模后重试。",
+                )]
             try:
                 iopub_msg = self.kc.get_iopub_msg(timeout=1)
                 msg_list.append(iopub_msg)
@@ -164,9 +204,6 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 ):
                     break
             except Exception:
-                if self.interrupt_signal:
-                    self.km.interrupt_kernel()
-                    self.interrupt_signal = False
                 continue
 
         all_output: list[tuple[str, str]] = []
@@ -210,6 +247,14 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                     cleaned_output = self.delete_color_control_char(output)
                     all_output.append(("error", cleaned_output))
         return all_output
+
+    def _recover_dead_kernel(self) -> None:
+        """内核死锁/崩溃后的基础设施恢复：重启内核，失败仅告警不抛出。"""
+        try:
+            self.restart_jupyter_kernel()
+            logger.warning("Jupyter 内核已重启（此前无响应或超时）")
+        except Exception as e:
+            logger.error(f"内核重启失败: {e}")
 
     async def get_created_images(self, section: str) -> list[str]:
         """获取新创建的图片列表"""
