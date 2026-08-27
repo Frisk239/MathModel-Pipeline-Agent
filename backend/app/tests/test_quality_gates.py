@@ -13,6 +13,7 @@ from app.core.quality.checks import SHINGLE_CHARS, shingles
 from app.core.quality.contracts import GateVerdict
 from app.core.quality.g1_data_gate import (
     check_data_completeness,
+    drop_template_attachments,
     extract_required_from_problem,
 )
 from app.core.quality.g3_text_gate import check_citation_integrity, check_section_text
@@ -150,6 +151,25 @@ def test_g1_problem_text_2024c_regression():
     found = extract_required_from_problem(text)
     assert "附件1" in found and "附件2" in found
     assert not any("3" in f for f in found)
+
+
+def test_g1_drop_template_attachments_from_coordinator():
+    # 08832b52 实证：Coordinator 会把结果模板附件（附件3）写进 required_files
+    text = (
+        "详见附件 1。\n"
+        "统计数据见附件 2。\n"
+        "将结果填入 result2.xlsx（模板文件见附件 3）。\n"
+        "附件 3 须提交结果的模板文件（result2.xlsx）"
+    )
+    kept = drop_template_attachments(["附件1", "附件2", "附件3"], text)
+    assert "附件3" not in kept
+    assert "附件1" in kept and "附件2" in kept
+
+
+def test_g1_keep_coordinator_only_attachments():
+    # 题面完全未提及（正则覆盖不到）→ 保守保留，交由文件匹配判定
+    kept = drop_template_attachments(["附件9"], "某乡村有 1201 亩耕地")
+    assert kept == ["附件9"]
 
 
 def test_g1_explicit_files_list(tmp_path):

@@ -9,6 +9,7 @@ from app.core.task_state import TaskPhase, TaskStateMachine
 from app.core.quality.contracts import GateReport
 from app.core.quality.g1_data_gate import (
     check_data_completeness,
+    drop_template_attachments,
     extract_required_from_problem,
 )
 from app.core.quality.g3_text_gate import (
@@ -332,10 +333,12 @@ class MathModelWorkFlow(WorkFlow):
 
         ################################################ G1 数据完备性门
         self.state.transition(TaskPhase.G1_GATE, note="拆题完成，校验数据完备性")
-        # 所需附件 = Coordinator 声明 ∪ 题面正则提取（双保险）
+        # 所需附件 = Coordinator 声明（先剔除题面全为模板句的附件）∪ 题面正则提取（双保险）
         required = list(
             dict.fromkeys(
-                coordinator_response.required_files
+                drop_template_attachments(
+                    coordinator_response.required_files, problem.ques_all
+                )
                 + extract_required_from_problem(problem.ques_all)
             )
         )
