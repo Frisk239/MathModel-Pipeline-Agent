@@ -8,6 +8,16 @@ from app.core.llm.providers.base import (
 )
 from app.core.llm.types import StandardResponse, ToolCall, Usage
 
+# openai finish_reason → 归一化 stop_reason（anthropic 词表）。
+# llm 层的输出预算放大判断的是 "max_tokens"，不翻译则 openai 系协议
+# 的 length 截断永远不会触发放大（hy3 空响应事故的根因之一）。
+_OPENAI_FINISH_TO_STOP = {
+    "stop": "end_turn",
+    "length": "max_tokens",
+    "tool_calls": "tool_use",
+    "content_filter": "refusal",
+}
+
 
 class OpenAIChatProvider(BaseProvider):
     """OpenAI Chat Completions API (/v1/chat/completions) 实现。
@@ -97,7 +107,7 @@ class OpenAIChatProvider(BaseProvider):
                     for _, a in sorted(tc_acc.items())
                 ],
                 usage=usage,
-                stop_reason=finish_reason,
+                stop_reason=_OPENAI_FINISH_TO_STOP.get(finish_reason, finish_reason),
             )
 
         try:

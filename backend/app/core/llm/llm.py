@@ -42,6 +42,47 @@ def _is_conn_error(err: BaseException) -> bool:
     )
 
 
+async def _publish_best_effort(task_id: str, message: Any, *, tag: str) -> None:
+    """前端推送是 best-effort：Redis 抖动不应让已成功的 LLM 调用进重试回路。"""
+    try:
+        await redis_manager.publish_message(task_id, message)
+    except Exception as e:
+        logger.warning(f"[{tag}] 消息推送失败（不影响调用）: {e}")
+
+
+# 输出预算上限与自适应放大入口值。GLM 等 anthropic 兼容端 budget_tokens 是
+# 软约束（思考可膨胀挤占正文）；openai 系端点未显式配置时默认预算可能过小
+# （hy3 空响应事故：content=None + stop_reason=None 连发 6 次耗尽重试）。
+MAX_TOKENS_CEILING = 128000
+WIDEN_ENTRY_TOKENS = 16384
+
+
+def _widen_output_budget(
+    response: StandardResponse,
+    current: int | None,
+    *,
+    already_widened: bool,
+) -> int | None:
+    """返回下次重试应使用的输出预算；None 表示不应触发预算调整重试。
+
+    触发条件（无工具调用、且本次会话尚未调整过）：
+    - 截断：stop_reason=max_tokens（openai 的 length 已在 provider 归一化）
+    - 异常空输出：正文为空且非正常结束（end_turn）——思考挤占或端点默认预算过小
+    已配置预算则 ×2 放大；未配置则注入入口值。均封顶上限，整个会话仅一次。
+    """
+    if already_widened or response.tool_calls:
+        return None
+    truncated = response.stop_reason == "max_tokens"
+    empty_abnormal = not response.content and response.stop_reason != "end_turn"
+    if not (truncated or empty_abnormal):
+        return None
+    if current is None:
+        return WIDEN_ENTRY_TOKENS
+    if current >= MAX_TOKENS_CEILING:
+        return None
+    return min(current * 2, MAX_TOKENS_CEILING)
+
+
 class LLM:
     """大语言模型封装类，提供对话调用、重试和工具调用验证功能。"""
 
@@ -128,13 +169,14 @@ class LLM:
             for kind, buf in pending.items():
                 if not buf:
                     continue
-                await redis_manager.publish_message(
+                await _publish_best_effort(
                     self.task_id,
                     StreamDeltaMessage(
                         agent_type=stream_agent_type,  # type: ignore[arg-type]
                         kind=kind,  # type: ignore[arg-type]
                         delta="".join(buf),
                     ),
+                    tag="流式增量",
                 )
                 buf.clear()
             last_flush = time.monotonic()
@@ -149,11 +191,7 @@ class LLM:
             if time.monotonic() - last_flush >= 0.1:
                 await _flush_delta()
 
-        # 思考挤占输出预算的自适应放大：GLM 等 anthropic 兼容端不遵守
-        # budget_tokens 硬约束，思考可膨胀至上万 token，把正文挤到零或截断
-        # （stop_reason=max_tokens）。此时重发同样请求没有意义，放大
-        # max_tokens 重试一次（×2，封顶模型上限），仅一次，仍失败交给上层重试。
-        MAX_TOKENS_CEILING = 128000
+        # 输出预算自适应调整（截断/异常空输出时放大或注入，见 _widen_output_budget）
         adaptive_max_tokens = self.max_tokens
         tokens_widened = False
 
@@ -176,47 +214,55 @@ class LLM:
                 )
                 if stream_agent_type is not None and self.task_id:
                     await _flush_delta()
-                    await redis_manager.publish_message(
+                    await _publish_best_effort(
                         self.task_id,
                         StreamDeltaMessage(
                             agent_type=stream_agent_type,  # type: ignore[arg-type]
                             done=True,
                         ),
+                        tag="流式结束",
                     )
                 logger.info(
                     f"API返回: content={response.content!r}, "
                     f"tool_calls={len(response.tool_calls)}, "
                     f"stop_reason={response.stop_reason}"
                 )
-                if (
-                    response.stop_reason == "max_tokens"
-                    and not response.tool_calls
-                    and adaptive_max_tokens is not None
-                    and adaptive_max_tokens < MAX_TOKENS_CEILING
-                    and not tokens_widened
-                ):
-                    widened = min(adaptive_max_tokens * 2, MAX_TOKENS_CEILING)
+                widened = _widen_output_budget(
+                    response,
+                    adaptive_max_tokens,
+                    already_widened=tokens_widened,
+                )
+                if widened is not None:
                     logger.warning(
-                        f"[{agent_name}] 输出被 max_tokens={adaptive_max_tokens} 截断"
-                        f"（思考挤占输出预算），放大至 {widened} 重试一次"
+                        f"[{agent_name}] 输出为空或被截断"
+                        f"（stop_reason={response.stop_reason}, "
+                        f"max_tokens={adaptive_max_tokens}），"
+                        f"调整输出预算至 {widened} 重试一次"
                     )
                     adaptive_max_tokens = widened
                     tokens_widened = True
                     continue
                 self.chat_count += 1
                 if notify:
-                    await self.send_message(response, agent_name, sub_title)
+                    try:
+                        await self.send_message(response, agent_name, sub_title)
+                    except Exception as notify_err:
+                        # 终稿通知失败不丢弃已成功的响应（Redis 抖动只需告警）
+                        logger.warning(
+                            f"[{agent_name}] 终稿消息推送失败（不影响调用）: {notify_err}"
+                        )
                 return response
             except Exception as e:
                 logger.error(f"LLM 调用失败: {str(e)}")
                 if stream_agent_type is not None and self.task_id:
                     await _flush_delta()
-                    await redis_manager.publish_message(
+                    await _publish_best_effort(
                         self.task_id,
                         StreamDeltaMessage(
                             agent_type=stream_agent_type,  # type: ignore[arg-type]
                             done=True,
                         ),
+                        tag="流式结束",
                     )
                 if _is_conn_error(e):
                     chain = self._model_chain or [
@@ -238,13 +284,15 @@ class LLM:
                             f"[{agent_name}] 连接类错误，从 {old} 切换到 {self.model}"
                         )
                         if self.task_id:
-                            await redis_manager.publish_message(
+                            # best-effort：这里的 Redis 异常若上抛会掩盖原始的模型过载错误
+                            await _publish_best_effort(
                                 self.task_id,
                                 SystemMessage(
                                     # type 必须是 info：warning/error/success 会让前端 isRunning=false
                                     content=f"模型过载或超时，从 {old} 切换到 {self.model}",
                                     type="info",
                                 ),
+                                tag="模型切换通知",
                             )
                         if wrapping:
                             wait = min(5 * (3 ** (laps_done - 1)), 60)

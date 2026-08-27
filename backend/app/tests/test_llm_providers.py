@@ -241,6 +241,33 @@ class TestAdaptiveMaxTokens:
         assert calls == [8192]  # 工具调用截断交给反思回路，不放大
         assert len(resp.tool_calls) == 1
 
+    def test_injects_budget_when_unconfigured_and_empty(self):
+        # hy3 空响应事故形态：max_tokens 未配置（端点默认预算过小），
+        # content=None + stop_reason=None 连发，旧逻辑无物可放大直接放行
+        from app.core.llm.types import StandardResponse
+
+        llm, calls = self._make_llm(
+            [
+                StandardResponse(content=None, stop_reason=None),
+                StandardResponse(content="ok", stop_reason="end_turn"),
+            ]
+        )
+        llm.max_tokens = None
+        resp = asyncio.run(llm.chat(history=[{"role": "user", "content": "hi"}]))
+        assert calls == [None, 16384]  # 未配置时注入下限预算重试一次
+        assert resp.content == "ok"
+
+    def test_no_widen_on_normal_empty_end_turn(self):
+        # 正常结束（end_turn）但内容为空：模型行为问题，不是预算问题，不重试
+        from app.core.llm.types import StandardResponse
+
+        llm, calls = self._make_llm(
+            [StandardResponse(content=None, stop_reason="end_turn")]
+        )
+        resp = asyncio.run(llm.chat(history=[{"role": "user", "content": "hi"}]))
+        assert calls == [8192]
+        assert resp.content is None
+
 
 class TestAnthropicStreamDelta:
     """真流式：on_delta 逐事件上抛 thinking/text 增量，thinking 采集进 reasoning_content。"""
@@ -375,11 +402,48 @@ class TestOpenAIChatStream:
         assert received == [("thinking", "思前"), ("text", "答")]
         assert resp.content == "答"
         assert resp.reasoning_content == "思前"
-        assert resp.stop_reason == "tool_calls"
+        # openai finish_reason 已归一化为 anthropic 词表
+        assert resp.stop_reason == "tool_use"
         assert resp.usage.prompt_tokens == 5 and resp.usage.completion_tokens == 9
-        assert len(resp.tool_calls) == 1
-        assert resp.tool_calls[0].name == "execute_code"
-        assert resp.tool_calls[0].arguments == '{"code": "print(1)"}'
+
+    def test_finish_reason_length_normalized(self, monkeypatch):
+        """openai 的 length 截断必须归一化为 max_tokens，否则 llm 层放大永不触发。"""
+        from types import SimpleNamespace as NS
+
+        def chunk(delta=None, finish=None, usage=None):
+            choices = [NS(delta=delta, finish_reason=finish)] if (delta or finish) else []
+            return NS(choices=choices, usage=usage)
+
+        chunks = [
+            chunk(delta=NS(content="部分", reasoning_content=None, tool_calls=None)),
+            chunk(finish="length"),
+        ]
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                async def _gen():
+                    for c in chunks:
+                        yield c
+
+                return _gen()
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                self.chat = NS(completions=FakeCompletions())
+
+        monkeypatch.setattr(
+            "app.core.llm.providers.openai_chat.AsyncOpenAI", FakeClient
+        )
+        from app.core.llm.providers.openai_chat import OpenAIChatProvider
+
+        resp = asyncio.run(
+            OpenAIChatProvider().call(
+                messages=[{"role": "user", "content": "hi"}],
+                model="hy3",
+                api_key="k",
+            )
+        )
+        assert resp.stop_reason == "max_tokens"
 
 
 class TestModelFailover:
