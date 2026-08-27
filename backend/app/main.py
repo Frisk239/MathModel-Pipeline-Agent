@@ -46,6 +46,11 @@ async def lifespan(app: FastAPI):
     if stale:
         logger.warning(f"启动扫描：{stale} 个非终态任务已标记为 stale")
 
+    # 磁盘保留清理（logs/messages 按天数、work_dir 按任务数；失败不阻断启动）
+    from app.services.retention import run_startup_retention
+
+    run_startup_retention()
+
     yield
     logger.info("Stopping MathModelAgent")
 

@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     OPENALEX_API_KEY: Optional[str] = None
     EXA_API_KEY: Optional[str] = None
 
+    # 磁盘保留（启动时清理一次；默认保守，存量不超限就不删）
+    LOG_RETENTION_DAYS: int = 30  # logs/messages/*.json 保留天数
+    TASK_DIR_MAX_COUNT: int = 60  # project/work_dir 保留的最近任务目录数
+
     # 人工检查点开关（沿用上游键名，二期真实生效）
     HIL_TIMEOUT: int = 300  # 审批超时提示时间（秒）；无响应仍永久等待，绝不自动放行
     HIL_CHECKPOINTS: dict = {
