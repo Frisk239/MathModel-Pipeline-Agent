@@ -10,7 +10,7 @@
         class="w-2 h-2 rounded-full"
         :class="getStatusDotClass(service.status)"
       ></div>
-      <span class="capitalize">{{ key }}</span>
+      <span>{{ serviceLabels[key] }}</span>
     </div>
   </div>
 </template>
@@ -33,6 +33,12 @@ interface Services {
 	backend: ServiceStatus;
 	redis: ServiceStatus;
 }
+
+/** 用户可见标签（内部键名不外露） */
+const serviceLabels: Record<keyof Services, string> = {
+	backend: "后端",
+	redis: "Redis",
+};
 
 // ---- Reactive State ----
 

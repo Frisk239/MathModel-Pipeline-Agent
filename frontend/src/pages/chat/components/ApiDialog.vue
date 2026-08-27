@@ -207,7 +207,7 @@ const loadEffortOptions = async (key: AgentKey) => {
 			api_type: cfg.apiType || "openai-chat",
 		});
 		if (cached.data.found) {
-			applyEffortOptions(key, cached.data.supported, "✓ 已应用缓存的能力数据");
+			applyEffortOptions(key, cached.data.supported, "已应用缓存的能力数据");
 			return;
 		}
 	} catch {
@@ -383,7 +383,7 @@ const validateModelApiKey = async (config: {
 	} catch (error) {
 		return {
 			valid: false,
-			message: "✗ 验证失败: 无法连接到验证服务",
+			message: "验证失败: 无法连接到验证服务",
 		};
 	}
 };

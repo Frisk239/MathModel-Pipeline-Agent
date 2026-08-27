@@ -187,28 +187,28 @@ async def validate_api_key(request: ValidateApiKeyRequest):
             max_tokens=1,
         )
 
-        return ValidateApiKeyResponse(valid=True, message="✓ 模型 API 验证成功")
+        return ValidateApiKeyResponse(valid=True, message="模型 API 验证成功")
     except Exception as e:
         error_msg = str(e)
 
         # 解析不同类型的错误
         if "401" in error_msg or "Unauthorized" in error_msg:
-            return ValidateApiKeyResponse(valid=False, message="✗ API Key 无效或已过期")
+            return ValidateApiKeyResponse(valid=False, message="API Key 无效或已过期")
         elif "404" in error_msg or "Not Found" in error_msg:
             return ValidateApiKeyResponse(
-                valid=False, message="✗ 模型 ID 不存在或 Base URL 错误"
+                valid=False, message="模型 ID 不存在或 Base URL 错误"
             )
         elif "429" in error_msg or "rate limit" in error_msg.lower():
             return ValidateApiKeyResponse(
-                valid=False, message="✗ 请求过于频繁，请稍后再试"
+                valid=False, message="请求过于频繁，请稍后再试"
             )
         elif "403" in error_msg or "Forbidden" in error_msg:
             return ValidateApiKeyResponse(
-                valid=False, message="✗ API 权限不足或账户余额不足"
+                valid=False, message="API 权限不足或账户余额不足"
             )
         else:
             return ValidateApiKeyResponse(
-                valid=False, message=f"✗ 验证失败: {error_msg[:50]}..."
+                valid=False, message=f"验证失败: {error_msg[:50]}..."
             )
 
 
@@ -226,11 +226,11 @@ async def validate_openalex_email(request: ValidateOpenalexEmailRequest):
         logger.debug(f"OpenAlex Email 验证响应: {response}")
         response.raise_for_status()
         return ValidateOpenalexEmailResponse(
-            valid=True, message="✓ OpenAlex Email 验证成功"
+            valid=True, message="OpenAlex Email 验证成功"
         )
     except Exception as e:
         return ValidateOpenalexEmailResponse(
-            valid=False, message=f"✗ OpenAlex Email 验证失败: {str(e)}"
+            valid=False, message=f"OpenAlex Email 验证失败: {str(e)}"
         )
 
 
@@ -279,18 +279,18 @@ async def list_models(request: ListModelsRequest):
         return ListModelsResponse(
             success=True,
             models=sorted(model_ids),
-            message=f"✓ 探测到 {len(model_ids)} 个可用模型",
+            message=f"探测到 {len(model_ids)} 个可用模型",
         )
     except Exception as e:
         error_msg = str(e)
         if "401" in error_msg or "Unauthorized" in error_msg:
-            message = "✗ API Key 无效或已过期"
+            message = "API Key 无效或已过期"
         elif "404" in error_msg or "Not Found" in error_msg:
-            message = "✗ Base URL 错误或该协议不支持模型列表接口"
+            message = "Base URL 错误或该协议不支持模型列表接口"
         elif "429" in error_msg or "rate limit" in error_msg.lower():
-            message = "✗ 请求过于频繁，请稍后再试"
+            message = "请求过于频繁，请稍后再试"
         else:
-            message = f"✗ 探测失败: {error_msg[:50]}..."
+            message = f"探测失败: {error_msg[:50]}..."
         return ListModelsResponse(success=False, models=[], message=message)
 
 
@@ -332,7 +332,7 @@ async def probe_reasoning(request: ProbeReasoningRequest):
             return ProbeReasoningResponse(
                 success=True,
                 supported=cached["supported"],
-                message="✓ 命中能力缓存（再次点击探测可强制刷新）",
+                message="命中能力缓存（再次点击探测可强制刷新）",
             )
 
     try:
@@ -350,10 +350,10 @@ async def probe_reasoning(request: ProbeReasoningRequest):
                     thinking={"type": "enabled", "budget_tokens": 1024},
                 )
                 supported = ["off", *PROBE_EFFORTS]
-                message = "✓ 该模型支持思考（建议用预算数值精确控制）"
+                message = "该模型支持思考（建议用预算数值精确控制）"
             except AnthropicBadRequestError:
                 supported = ["off"]
-                message = "✓ 该模型未检出思考支持，仅可关闭"
+                message = "该模型未检出思考支持，仅可关闭"
             save_capability(request.api_type, request.base_url, request.model_id, supported)
             return ProbeReasoningResponse(success=True, supported=supported, message=message)
 
@@ -396,7 +396,7 @@ async def probe_reasoning(request: ProbeReasoningRequest):
             await call_openai_with_retry(None)
         except BadRequestError as e:
             return ProbeReasoningResponse(
-                success=False, supported=[], message=f"✗ 模型不可用: {str(e)[:80]}"
+                success=False, supported=[], message=f"模型不可用: {str(e)[:80]}"
             )
 
         # 串行逐档位试探：并发小请求容易被中转站 WAF 拦截，档位间限速避免触发 429
@@ -409,21 +409,21 @@ async def probe_reasoning(request: ProbeReasoningRequest):
                 continue
             await asyncio.sleep(0.5)
         if len(supported) == 1:
-            message = "✓ 该模型未检出思考档位，仅支持关闭（默认）"
+            message = "该模型未检出思考档位，仅支持关闭（默认）"
         else:
-            message = f"✓ 探测到 {len(supported) - 1} 个思考档位"
+            message = f"探测到 {len(supported) - 1} 个思考档位"
         save_capability(request.api_type, request.base_url, request.model_id, supported)
         return ProbeReasoningResponse(success=True, supported=supported, message=message)
     except Exception as e:
         error_msg = str(e)
         if "401" in error_msg or "Unauthorized" in error_msg:
-            message = "✗ API Key 无效或已过期"
+            message = "API Key 无效或已过期"
         elif "404" in error_msg or "Not Found" in error_msg:
-            message = "✗ 模型 ID 不存在或 Base URL 错误"
+            message = "模型 ID 不存在或 Base URL 错误"
         elif "429" in error_msg or "rate limit" in error_msg.lower():
-            message = "✗ 请求过于频繁，请稍后再试"
+            message = "请求过于频繁，请稍后再试"
         else:
-            message = f"✗ 探测失败: {error_msg[:50]}..."
+            message = f"探测失败: {error_msg[:50]}..."
         return ProbeReasoningResponse(success=False, supported=[], message=message)
 
 
