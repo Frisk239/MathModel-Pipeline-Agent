@@ -1,7 +1,7 @@
 <script setup lang="ts">
+import { agentMetaOf } from "@/utils/agentMeta";
 import type { AgentType } from "@/utils/enum";
 import { renderMarkdown } from "@/utils/markdown";
-import { agentMetaOf } from "@/utils/agentMeta";
 import { Brain, ChevronDown, LoaderCircle } from "lucide-vue-next";
 import { computed, ref, watch } from "vue";
 

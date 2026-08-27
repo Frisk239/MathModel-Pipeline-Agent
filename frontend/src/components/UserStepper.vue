@@ -19,7 +19,7 @@ import { useTaskStore } from "@/stores/task";
 import { FileUp, Rocket, X } from "lucide-vue-next";
 import { ref } from "vue";
 import { useRouter } from "vue-router";
-import FileConfirmDialog from "./FileConfirmDialog.vue";
+import type FileConfirmDialog from "./FileConfirmDialog.vue";
 
 const taskStore = useTaskStore();
 const { toast } = useToast();

@@ -15,7 +15,6 @@ from app.utils.common_utils import (
 )
 import os
 import asyncio
-from typing import Dict, Tuple
 from fastapi import HTTPException
 from app.schemas.request import ExampleRequest
 from pydantic import BaseModel
@@ -33,7 +32,11 @@ import requests
 router = APIRouter()
 
 # 任务注册表: task_id -> (asyncio.Task, asyncio.Event)
-_active_tasks: Dict[str, Tuple[asyncio.Task, asyncio.Event]] = {}
+_active_tasks: dict[str, tuple[asyncio.Task, asyncio.Event]] = {}
+
+# 上传附件的扩展名白名单与单文件大小上限
+UPLOAD_ALLOWED_EXTS = {".csv", ".xlsx", ".xls", ".txt", ".json", ".pdf"}
+UPLOAD_MAX_BYTES = 50 * 1024 * 1024
 
 
 class ValidateApiKeyRequest(BaseModel):
@@ -154,7 +157,9 @@ async def save_api_config(request: SaveApiConfigRequest):
         return {"success": True, "message": "配置保存成功"}
     except Exception as e:
         logger.error(f"保存配置失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"保存配置失败: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"保存配置失败: {str(e)}"
+        ) from e
 
 
 @router.post("/validate-api-key", response_model=ValidateApiKeyResponse)
@@ -457,7 +462,7 @@ async def exampleModeling(
     task_id = create_task_id()
     work_dir = create_work_dir(task_id)
     example_dir = os.path.join("app", "example", "example", example_request.source)
-    with open(os.path.join(example_dir, "questions.txt"), "r", encoding="utf-8") as f:
+    with open(os.path.join(example_dir, "questions.txt"), encoding="utf-8") as f:
         ques_all = f.read()
 
     current_files = get_current_files(example_dir, "data")
@@ -496,30 +501,44 @@ async def modeling(
     if files:
         logger.info(f"开始处理上传的文件，工作目录: {work_dir}")
         for file in files:
+            # 统一斜杠后取 basename；若原始名仍含路径成分则视为目录穿越，整体拒绝
+            raw_name = (file.filename or "").strip()
+            filename = os.path.basename(raw_name.replace("\\", "/"))
+            if not raw_name or filename != raw_name or filename in (".", ".."):
+                raise HTTPException(
+                    status_code=400, detail=f"非法文件名: {file.filename!r}"
+                )
+
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in UPLOAD_ALLOWED_EXTS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"不支持的文件类型: {filename}，"
+                    f"允许: {', '.join(sorted(UPLOAD_ALLOWED_EXTS))}",
+                )
+
+            content = await file.read()
+            if not content:
+                logger.warning(f"文件 {filename} 内容为空")
+                continue
+            if len(content) > UPLOAD_MAX_BYTES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"文件 {filename} 超过单文件大小上限 "
+                    f"{UPLOAD_MAX_BYTES // (1024 * 1024)}MB",
+                )
+
+            data_file_path = os.path.join(work_dir, filename)
+            logger.info(f"保存文件: {filename} -> {data_file_path}")
             try:
-                assert file.filename is not None
-                data_file_path = os.path.join(work_dir, file.filename)
-                logger.info(f"保存文件: {file.filename} -> {data_file_path}")
-
-                # 确保文件名不为空
-                if not file.filename:
-                    logger.warning("跳过空文件名")
-                    continue
-
-                content = await file.read()
-                if not content:
-                    logger.warning(f"文件 {file.filename} 内容为空")
-                    continue
-
                 with open(data_file_path, "wb") as f:
                     f.write(content)
-                logger.info(f"成功保存文件: {data_file_path}")
-
-            except Exception as e:
-                logger.error(f"保存文件 {file.filename} 失败: {str(e)}")
+            except OSError as e:
+                logger.error(f"保存文件 {filename} 失败: {str(e)}")
                 raise HTTPException(
-                    status_code=500, detail=f"保存文件 {file.filename} 失败: {str(e)}"
-                )
+                    status_code=500, detail=f"保存文件 {filename} 失败"
+                ) from e
+            logger.info(f"成功保存文件: {data_file_path}")
     else:
         logger.warning("没有上传文件")
 

@@ -6,8 +6,8 @@ import {
 	SidebarContent,
 	SidebarFooter,
 	SidebarHeader,
-	SidebarRail,
 	type SidebarProps,
+	SidebarRail,
 } from "@/components/ui/sidebar";
 
 const props = withDefaults(defineProps<SidebarProps>(), {

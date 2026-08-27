@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from app.routers import modeling_router, ws_router, common_router, files_router
+from app.config.setting import settings
 from app.utils.log_util import logger
 from fastapi.staticfiles import StaticFiles
 from app.utils.cli import get_ascii_banner, center_cli_str
@@ -62,18 +63,27 @@ app.include_router(common_router.router)
 app.include_router(files_router.router)
 
 
-# 跨域 CORS
+# 跨域 CORS：来源读配置；"*" 与 allow_credentials=True 互斥（浏览器会拒绝
+# 带凭证的通配跨域），配置为通配时不带凭证
+_cors_raw = settings.CORS_ALLOW_ORIGINS
+_cors_origins = [_cors_raw] if isinstance(_cors_raw, str) else list(_cors_raw)
+if "*" in _cors_origins:
+    _cors_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials="*" not in _cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],  # 暴露所有响应头
 )
 
+# 静态资源根目录；启动前确保存在（干净 checkout 下 import 即挂载，不能假设目录已在）
+_static_root = os.path.join("project", "work_dir")
+os.makedirs(_static_root, exist_ok=True)
 app.mount(
     "/static",  # 这是访问时的前缀
-    StaticFiles(directory="project/work_dir"),  # 这是本地文件夹路径
+    StaticFiles(directory=_static_root),  # 这是本地文件夹路径
     name="static",
 )
