@@ -192,12 +192,16 @@ class TaskStateMachine:
 
     # ---- 修复轮次 ----
 
-    def request_repair(self, gate: str) -> int:
-        """申请一轮修复；返回当前轮次编号，超限抛 TransitionError。"""
+    def request_repair(self, gate: str, cap: int | None = None) -> int:
+        """申请一轮修复；返回当前轮次编号，超限抛 TransitionError。
+
+        cap 允许调用方按门覆盖默认上限（如 G2 的可配置轮次）。
+        """
+        limit = cap if cap and cap > 0 else MAX_REPAIR_ROUNDS
         used = self.repair_rounds.get(gate, 0)
-        if used >= MAX_REPAIR_ROUNDS:
+        if used >= limit:
             raise TransitionError(
-                f"门 {gate} 修复轮次已达上限 {MAX_REPAIR_ROUNDS}，必须升级人工决策"
+                f"门 {gate} 修复轮次已达上限 {limit}，必须升级人工决策"
             )
         used += 1
         self.repair_rounds[gate] = used

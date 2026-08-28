@@ -165,6 +165,8 @@ def test_g2_loop_exhausts_and_degrades(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(settings, "QUALITY_GATES_ENABLED", True)
     monkeypatch.setattr(settings, "AUTO_MODE", True)
+    # 含 critical 场景的耗尽降级：固定 3 轮使断言不受默认值调整影响
+    monkeypatch.setattr(settings, "G2_MAX_REPAIR_ROUNDS", MAX_REPAIR_ROUNDS)
 
     coder = _FakeCoder()
     wf, ctx = _g2_ctx(tmp_path, coder)
@@ -233,3 +235,163 @@ def test_final_review_ab_baseline_short_circuits(tmp_path, monkeypatch):
 
     assert wf.state.phase == TaskPhase.COMPLETED
     assert (tmp_path / "verify_report.md").exists()
+
+
+# ---- G2 分级放行与轮次上限（2026-08-28 A/B 后的策略调整） ----
+
+
+def test_g2_loop_exhausts_without_critical_tiered_release(tmp_path, monkeypatch):
+    """轮次耗尽且剩余无 critical → 分级放行：遗留记录但不记 auto_degraded。"""
+    monkeypatch.setattr("app.core.workflow.redis_manager", NS(publish_message=_noop))
+    monkeypatch.setattr(
+        "app.core.workflow.check_notebook_artifacts", lambda *a, **k: []
+    )
+    monkeypatch.setattr("app.core.workflow.run_g2_ai_review", _noop)
+    monkeypatch.setattr(settings, "G2_MAX_REPAIR_ROUNDS", 2)
+    monkeypatch.setattr(
+        "app.core.workflow.combine_g2",
+        lambda l1, l2: GateReport(
+            gate=GateName.G2_L2,
+            verdict=GateVerdict.MATERIAL,
+            summary="仅 minor 拦截",
+            items=[
+                RoadmapItem(
+                    id="g2-minor-1",
+                    problem="图表标题不完整",
+                    evidence_anchor="t",
+                    severity=Severity.MINOR,
+                    obligation=Obligation.CONSIDER,
+                    cost_scope="code",
+                    acceptance_criteria="补标题",
+                    target="notebook",
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "app.core.workflow.is_plan_fallback_candidate", lambda items: False
+    )
+    monkeypatch.setattr(
+        "app.core.workflow.archive_stale_deliverables", lambda *a, **k: []
+    )
+    monkeypatch.setattr(settings, "QUALITY_GATES_ENABLED", True)
+    monkeypatch.setattr(settings, "AUTO_MODE", True)
+
+    coder = _FakeCoder()
+    wf, ctx = _g2_ctx(tmp_path, coder)
+
+    resp = asyncio.run(
+        wf._run_g2_repair_loop(
+            ctx, "ques1", "prompt", 0.0, NS(created_images=[], code_response="c0")
+        )
+    )
+
+    assert coder.calls == 2  # 修复到轮次上限
+    assert resp.code_response == "code"
+    assert wf.g2_leftover_items  # 遗留照记（局限性章节）
+    # 分级放行：不算降级审计
+    assert not any(
+        h["action"] == "auto_degraded" for h in wf.state.override_history
+    )
+
+
+def test_g2_round_cap_is_configurable(tmp_path, monkeypatch):
+    """G2 修复轮上限走 settings.G2_MAX_REPAIR_ROUNDS，不再写死 3。"""
+    monkeypatch.setattr("app.core.workflow.redis_manager", NS(publish_message=_noop))
+    monkeypatch.setattr(
+        "app.core.workflow.check_notebook_artifacts", lambda *a, **k: []
+    )
+    monkeypatch.setattr("app.core.workflow.run_g2_ai_review", _noop)
+    monkeypatch.setattr(
+        "app.core.workflow.combine_g2",
+        lambda l1, l2: _material_report(GateName.G2_L2, ["含 critical 的问题"]),
+    )
+    monkeypatch.setattr(
+        "app.core.workflow.is_plan_fallback_candidate", lambda items: False
+    )
+    monkeypatch.setattr(
+        "app.core.workflow.archive_stale_deliverables", lambda *a, **k: []
+    )
+    monkeypatch.setattr(settings, "QUALITY_GATES_ENABLED", True)
+    monkeypatch.setattr(settings, "AUTO_MODE", True)
+    monkeypatch.setattr(settings, "G2_MAX_REPAIR_ROUNDS", 4)
+
+    coder = _FakeCoder()
+    wf, ctx = _g2_ctx(tmp_path, coder)
+
+    asyncio.run(
+        wf._run_g2_repair_loop(
+            ctx, "ques1", "prompt", 0.0, NS(created_images=[], code_response="c0")
+        )
+    )
+
+    assert coder.calls == 4
+
+
+def test_request_repair_cap_override(tmp_path):
+    from app.core.task_state import TransitionError
+
+    sm = TaskStateMachine("cap-test", str(tmp_path))
+    assert sm.request_repair("g3", cap=1) == 1
+    with pytest.raises(TransitionError, match="上限 1"):
+        sm.request_repair("g3", cap=1)
+    # cap 缺省回退模块默认
+    assert sm.request_repair("g3") == 2
+
+
+# ---- 门报告非空断言（防评审静默失效：stream_agent_type 回归的教训） ----
+
+
+def test_final_review_g4_actually_runs_and_reports(tmp_path, monkeypatch):
+    """质量门开启时 G4 终审必须真实执行并产出报告——评审调用静默失败
+    （如 LLM 层回归导致全部 not_checked）时本测试必须变红。"""
+    import json as _json
+
+    from app.core.llm.types import StandardResponse
+
+    class _FakeReviewLLM:
+        async def chat(self, **kwargs):
+            return StandardResponse(
+                content=_json.dumps(
+                    {
+                        "dimensions": {
+                            "model_soundness": "MEETS",
+                            "assumption_validity": "MEETS",
+                            "solution_correctness": "MEETS",
+                            "reproducibility": "MEETS",
+                            "result_validity": "MEETS",
+                            "writing_norm": "MEETS",
+                            "sensitivity": "MEETS",
+                        },
+                        "items": [],
+                    }
+                )
+            )
+
+    monkeypatch.setattr("app.core.workflow.redis_manager", NS(publish_message=_noop))
+    monkeypatch.setattr(settings, "QUALITY_GATES_ENABLED", True)
+    monkeypatch.setattr(settings, "AUTO_MODE", True)
+
+    wf = _make_wf(tmp_path)
+    for phase in (
+        TaskPhase.SPLITTING,
+        TaskPhase.G1_GATE,
+        TaskPhase.MODELING,
+        TaskPhase.CODING,
+        TaskPhase.WRITING,
+    ):
+        wf.state.transition(phase)
+
+    (tmp_path / "res.md").write_text("# 论文\n正文", encoding="utf-8")
+
+    ctx = _PipelineContext(problem=NS(ques_all="q", task_id="wf-test"))
+    ctx.user_output = NS(save_result=lambda: None, get_res=lambda: "res")
+    ctx.review_llm = _FakeReviewLLM()
+
+    asyncio.run(wf._run_final_review(ctx))
+
+    g4 = [r for r in wf.gate_reports if r.gate == GateName.G4]
+    assert g4, "G4 报告缺失：终审未执行"
+    assert "未执行" not in g4[0].summary, f"终审被静默跳过: {g4[0].summary}"
+    assert g4[0].verdict.value != "material"
+    assert wf.state.phase == TaskPhase.COMPLETED

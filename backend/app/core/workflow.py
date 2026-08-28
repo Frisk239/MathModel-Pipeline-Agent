@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAgent
 from app.core.task_state import TaskPhase, TaskStateMachine
-from app.core.quality.contracts import GateReport
+from app.core.quality.contracts import GateReport, Severity
 from app.core.quality.g1_data_gate import (
     check_data_completeness,
     drop_template_attachments,
@@ -384,7 +384,12 @@ class MathModelWorkFlow(WorkFlow):
             raise e
 
     async def _run_g1_gate(self, ctx: "_PipelineContext") -> None:
-        """G1 数据完备性门：material 时 AUTO_MODE 降级 / 人工三分支。"""
+        """G1 数据完备性门：material 时 AUTO_MODE 降级 / 人工三分支。
+
+        注意：G1 是纯本地检查（题面附件 vs 工作目录，零 LLM 调用），故
+        不受 QUALITY_GATES_ENABLED 控制——关掉它只会让"演示数据论文"
+        风险回归，没有收益。
+        """
         self.state.transition(TaskPhase.G1_GATE, note="拆题完成，校验数据完备性")
         # 所需附件 = Coordinator 声明（先剔除题面全为模板句的附件）∪ 题面正则提取（双保险）
         required = list(
@@ -723,7 +728,9 @@ class MathModelWorkFlow(WorkFlow):
                     "禁止保留报错的历史尝试 cell；其余已成功的代码保持不变。"
                 )
             try:
-                round_no = self.state.request_repair("g2")
+                round_no = self.state.request_repair(
+                    "g2", cap=settings.G2_MAX_REPAIR_ROUNDS
+                )
             except Exception:
                 # v3/P2-5：修复轮耗尽 → 先试方案回退（+1 轮），否则降级/人工决策
                 fallback = await self._g2_plan_fallback(
@@ -846,6 +853,12 @@ class MathModelWorkFlow(WorkFlow):
         reject 直接抛 CancelledError 中止任务。
         """
         if settings.AUTO_MODE:
+            if not any(it.severity == Severity.CRITICAL for it in g2_report.items):
+                # 分级放行：耗尽后仅剩 major/minor（A/B 实测常态），遗留照记
+                # 局限性章节，但不记 auto_degraded 降级审计
+                self.g2_leftover_items.extend(g2_report.items)
+                logger.info(f"({key}) 修复轮耗尽且无 critical，分级放行")
+                return "break", ""
             # 全自动模式：耗尽自动降级放行（遗留如实记录，与人工决策区分审计）
             self.state.record_auto_degrade("g2", f"({key}) {g2_report.summary}")
             self.g2_leftover_items.extend(g2_report.items)
