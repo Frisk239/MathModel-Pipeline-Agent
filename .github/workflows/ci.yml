@@ -16,21 +16,36 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install "ruff>=0.9.10"
-      - run: ruff check app
-        working-directory: backend
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - run: uv run ruff check app
+      - run: uv run pytest -q
 
   frontend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+      # action 只读仓库根的 packageManager 字段，前端在子目录故需显式指定版本
+      # （与 frontend/package.json 的 packageManager 保持同步）
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.3
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npx --yes @biomejs/biome@1.9.4 check --formatter-enabled=false src
-        working-directory: frontend
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec biome check --formatter-enabled=false src
+      - run: pnpm exec vue-tsc -b

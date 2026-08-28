@@ -2,9 +2,14 @@
 
 import json as _json
 import re
+import time
 
 from anthropic import AsyncAnthropic
-from app.core.llm.providers.base import BaseProvider, HTTP_USER_AGENT
+from app.core.llm.providers.base import (
+    BaseProvider,
+    HTTP_USER_AGENT,
+    llm_http_timeout,
+)
 from app.core.llm.types import StandardResponse, ToolCall, Usage
 
 # 思考深度档位到 budget_tokens 的换算表（Anthropic 协议只接受数值预算）
@@ -39,6 +44,7 @@ class AnthropicProvider(BaseProvider):
             api_key=api_key,
             base_url=base_url,
             default_headers={"User-Agent": HTTP_USER_AGENT},
+            timeout=llm_http_timeout(),
         )
 
         system_prompt, anthropic_messages = self._convert_messages(messages)
@@ -69,11 +75,15 @@ class AnthropicProvider(BaseProvider):
         # 流式（"Streaming is required for operations that may take longer than
         # 10 minutes"）；流式聚合结果与非流式 Message 同构，且长请求不易被中间层掐断。
         # on_delta 提供时逐事件上抛 thinking/text 增量（过程展示）。
+        t0 = time.monotonic()
+        first_token_ms = 0
         async with client.messages.stream(**kwargs) as stream:
             if on_delta is not None:
                 async for event in stream:
                     if event.type != "content_block_delta":
                         continue
+                    if not first_token_ms:
+                        first_token_ms = round((time.monotonic() - t0) * 1000)
                     delta = getattr(event, "delta", None)
                     delta_type = getattr(delta, "type", "")
                     if delta_type == "thinking_delta":
@@ -110,6 +120,8 @@ class AnthropicProvider(BaseProvider):
             prompt_tokens=response.usage.input_tokens,
             completion_tokens=response.usage.output_tokens,
         )
+        usage.first_token_ms = first_token_ms
+        usage.latency_ms = round((time.monotonic() - t0) * 1000)
 
         return StandardResponse(
             content=content,

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { agentMetaOf } from "@/utils/agentMeta";
 import type { AgentType } from "@/utils/enum";
 import { renderMarkdown } from "@/utils/markdown";
 import type { HTMLAttributes } from "vue";
@@ -11,6 +12,8 @@ interface BubbleProps {
 	agentType?: AgentType;
 	class?: HTMLAttributes["class"];
 	content: string;
+	/** 消息时间（HH:mm），Agent 角色行展示 */
+	time?: string;
 }
 
 const props = withDefaults(defineProps<BubbleProps>(), {
@@ -35,20 +38,7 @@ watch(
 
 // ---- Agent 元信息 ----
 
-const agentMeta = computed(() => {
-	switch (props.agentType) {
-		case "CoderAgent":
-			return { emoji: "👨‍💻", label: "代码手" };
-		case "WriterAgent":
-			return { emoji: "✍️", label: "论文手" };
-		case "ModelerAgent":
-			return { emoji: "🧮", label: "建模手" };
-		case "CoordinatorAgent":
-			return { emoji: "🧭", label: "协调者" };
-		default:
-			return { emoji: "🤖", label: "Agent" };
-	}
-});
+const agentMeta = computed(() => agentMetaOf(props.agentType));
 </script>
 
 <template>
@@ -58,16 +48,17 @@ const agentMeta = computed(() => {
     props.type === 'agent' ? 'bubble-agent' : '',
     props.class
   ]">
-    <!-- 用户消息：右对齐蓝底 -->
+    <!-- 用户消息：右对齐主色底 -->
     <div v-if="props.type === 'user'" class="flex flex-col items-end gap-1">
-      <div class="prose prose-sm max-w-[80%] rounded-2xl bg-[#2563eb] px-4 py-2 text-sm text-white shadow-sm"
+      <div class="prose prose-sm max-w-[80%] rounded-2xl bg-primary px-4 py-2 text-sm text-primary-foreground shadow-sm"
         v-html="renderedContent"></div>
     </div>
-    <!-- Agent 消息：头像行 + 内容卡 -->
+    <!-- Agent 消息：角色行 + 内容卡 -->
     <div v-else class="flex w-full flex-col gap-1">
       <div class="flex items-center gap-1.5 select-none">
-        <span class="text-base leading-none">{{ agentMeta.emoji }}</span>
+        <component :is="agentMeta.icon" class="h-3.5 w-3.5 text-muted-foreground" />
         <span class="text-xs font-medium text-muted-foreground">{{ agentMeta.label }}</span>
+        <span v-if="props.time" class="text-[10px] tabular-nums text-muted-foreground/50">{{ props.time }}</span>
       </div>
       <div
         class="prose prose-sm prose-slate max-w-none rounded-xl border border-black/5 bg-muted/60 px-3.5 py-2.5 text-sm shadow-sm dark:border-white/10"

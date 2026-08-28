@@ -27,4 +27,6 @@ export interface ModelConfig {
 	reasoningEffort?: string;
 	/** 思考 token 预算（仅 anthropic 协议生效） */
 	thinkingBudget?: number | null;
+	/** 同端点备用模型，逗号分隔（过载/超时时按序切换） */
+	fallbackModels?: string;
 }

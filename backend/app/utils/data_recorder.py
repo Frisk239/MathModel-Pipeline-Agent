@@ -3,7 +3,7 @@
 import json
 import os
 from app.utils.log_util import logger
-from typing import Any, Dict
+from typing import Any
 
 
 # TODO: 记录数据
@@ -91,7 +91,7 @@ class DataRecorder:
         self.agents_chat_history[agent_name].append(msg)
         self.write_to_json(self.agents_chat_history, "chat_history.json")
 
-    def chat_completion_to_dict(self, completion: Any) -> Dict:
+    def chat_completion_to_dict(self, completion: Any) -> dict:
         """将 ChatCompletion 对象转换为可序列化的字典"""
         return {
             "id": completion.id,

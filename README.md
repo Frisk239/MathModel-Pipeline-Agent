@@ -25,6 +25,8 @@ docker-compose up
 
 Windows 也可双击 `win_start.bat`。
 
+> **安全提示**：后端默认只监听 `127.0.0.1`。本服务没有鉴权，且会在本机执行 LLM 生成的 Python 代码——把端口暴露到局域网等于把执行权交出去。确需局域网访问时，将 `win_start.bat` 中的 `--host` 改为 `0.0.0.0` 前请自行确认网络环境可信。
+
 ## 质量门与审批体系
 
 流水线在四个 Agent（Coordinator 拆题 → Modeler 建模 → Coder 编码 → Writer 写作）之间布设四道质量门与人工检查点，设计规格见 `docs/quality-gates-plan.md` 与 `docs/adr/`：
@@ -42,8 +44,8 @@ Windows 也可双击 `win_start.bat`。
 
 PR / push 到 `backend/`、`frontend/` 时跑：
 
-- `ruff check app`（backend）
-- `biome check --formatter-enabled=false src`（frontend；忽略 `components/ui` 与大资源）
+- backend：`uv sync` 后 `ruff check app` + `pytest -q`
+- frontend：`pnpm install` 后 `biome check --formatter-enabled=false src` + `vue-tsc -b`
 
 ## 上游同步
 

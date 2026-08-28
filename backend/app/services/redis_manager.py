@@ -51,7 +51,7 @@ class RedisManager:
             # 读取现有消息（如果文件存在）
             messages = []
             if file_path.exists():
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, encoding="utf-8") as f:
                     messages = json.load(f)
 
             # 添加新消息

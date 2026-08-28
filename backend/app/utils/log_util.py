@@ -3,6 +3,8 @@
 import os
 import sys
 import time
+
+from app.config.setting import settings
 from loguru import logger as _logger  # type: ignore[import-unresolved]
 
 
@@ -40,11 +42,18 @@ class LoggerInitializer:
         )
         _logger.remove()
         # 移除后重新添加sys.stderr, 目的: 控制台输出与文件日志内容和结构一致
-        _logger.add(sys.stderr, filter=self.__filter, format=format_str, enqueue=False)
+        _logger.add(
+            sys.stderr,
+            filter=self.__filter,
+            format=format_str,
+            level=settings.LOG_LEVEL,
+            enqueue=False,
+        )
         _logger.add(
             self.log_path_error,
             filter=self.__filter,
             format=format_str,
+            level=settings.LOG_LEVEL,
             rotation="50MB",
             encoding="utf-8",
             enqueue=False,

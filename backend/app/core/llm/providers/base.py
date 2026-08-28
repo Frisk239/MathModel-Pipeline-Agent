@@ -1,9 +1,21 @@
 """LLM Provider 抽象基类。"""
 
 from abc import ABC, abstractmethod
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
+import httpx
+
+from app.config.setting import settings
 from app.core.llm.types import StandardResponse
+
+
+def llm_http_timeout() -> httpx.Timeout:
+    """Explicit HTTP timeout so zen cannot idle-hold a request for 18 minutes.
+
+    Stream ``read`` is the idle gap between deltas, not total request time.
+    """
+    read = float(getattr(settings, "LLM_READ_TIMEOUT", 180) or 180)
+    return httpx.Timeout(connect=15.0, read=read, write=60.0, pool=15.0)
 
 # 出站请求统一 User-Agent：部分中转站 WAF 直接屏蔽 OpenAI/Python 等 SDK 默认 UA
 HTTP_USER_AGENT = "MathModelAgent/0.1"

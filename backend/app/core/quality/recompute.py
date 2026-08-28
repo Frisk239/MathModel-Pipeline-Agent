@@ -103,7 +103,7 @@ def grim_mean_check(
 def pvalue_recompute(
     reported_p: float,
     statistic: float,
-    df: int,
+    df: int | tuple[int, int],
     test: str,
     tail: str = "two",
 ) -> RecomputeResult:
@@ -111,6 +111,7 @@ def pvalue_recompute(
 
     Args:
         test: t / f / chi2（F 与卡方强制上尾）。
+        df: 单自由度；F 检验传 (dfn, dfd) 二元组。
         tail: two / upper / lower（t 检验有效）。
     """
     try:
@@ -128,7 +129,8 @@ def pvalue_recompute(
             else:
                 p = stats.t.sf(abs(statistic), df)
         elif test in ("f", "anova"):
-            p = stats.f.sf(statistic, df)
+            dfn, dfd = df if isinstance(df, tuple) else (df, df)
+            p = stats.f.sf(statistic, dfn, dfd)
         elif test in ("chi2", "chisquare", "x2"):
             p = stats.chi2.sf(statistic, df)
         else:
@@ -194,3 +196,70 @@ def numeric_conservation(old_text: str, new_text: str) -> dict[str, list[str]]:
         "removed": sorted((old_c - new_c).elements()),
         "added": sorted((new_c - old_c).elements()),
     }
+
+
+# ---- 文本统计陈述提取（G4 机械重算的输入层） ----
+
+
+class StatisticalClaim:
+    """论文文本中可重算的统计陈述（保守提取：只收精确数值形式）。"""
+
+    def __init__(self, kind: str, snippet: str, **values):
+        self.kind = kind  # grim_mean / t_test / f_test / chi2_test
+        self.snippet = snippet  # 原文片段（作 evidence_anchor）
+        self.values = values
+
+
+# 均值+N：中文「均值为 3.42（n=35）」/ 英文 "mean = 3.42, N = 35"
+_MEAN_N_RE = re.compile(
+    r"(?:均值|平均值|mean)\s*(?:为|=|：|:)?\s*(\d+\.\d+)\s*[(（,，)）]?\s*(?:n|N)\s*=\s*(\d+)"
+)
+# t(28) = 2.15, p = 0.041（p < 0.05 形式无精确值，不收）
+_T_P_RE = re.compile(
+    r"t\s*\(\s*(\d+)\s*\)\s*=\s*(-?\d+(?:\.\d+)?)\s*[,，]?\s*p\s*=\s*(0?\.\d+)",
+    re.IGNORECASE,
+)
+# F(2, 57) = 5.30, p = 0.002
+_F_P_RE = re.compile(
+    r"F\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*=\s*(\d+(?:\.\d+)?)\s*[,，]?\s*p\s*=\s*(0?\.\d+)",
+    re.IGNORECASE,
+)
+# χ²(3) = 8.20, p = 0.042（兼容 χ2/x2 写法；上标/数字必选防 x(3) 变量误报）
+_CHI2_P_RE = re.compile(
+    r"[χx][²2]\s*\(\s*(\d+)\s*\)\s*=\s*(\d+(?:\.\d+)?)\s*[,，]?\s*p\s*=\s*(0?\.\d+)"
+)
+
+
+def scan_statistical_claims(text: str) -> list[StatisticalClaim]:
+    """从论文文本提取可确定性重算的统计陈述。
+
+    设计纪律（与模块头一致）：宁缺毋滥——p < X、无 N 的均值、非标准
+    写法一律不收，提取不到就不验证（NOT_APPLICABLE），绝不猜测解析。
+    """
+    claims: list[StatisticalClaim] = []
+    for m in _MEAN_N_RE.finditer(text):
+        mean, n = float(m.group(1)), int(m.group(2))
+        if n <= 0:
+            continue
+        claims.append(
+            StatisticalClaim("grim_mean", m.group(0)[:80], mean=mean, n=n)
+        )
+    for m in _T_P_RE.finditer(text):
+        df, stat, p = int(m.group(1)), float(m.group(2)), float(m.group(3))
+        claims.append(
+            StatisticalClaim("t_test", m.group(0)[:80], df=df, stat=stat, p=p)
+        )
+    for m in _F_P_RE.finditer(text):
+        dfn, dfd = int(m.group(1)), int(m.group(2))
+        stat, p = float(m.group(3)), float(m.group(4))
+        claims.append(
+            StatisticalClaim(
+                "f_test", m.group(0)[:80], df=(dfn, dfd), stat=stat, p=p
+            )
+        )
+    for m in _CHI2_P_RE.finditer(text):
+        df, stat, p = int(m.group(1)), float(m.group(2)), float(m.group(3))
+        claims.append(
+            StatisticalClaim("chi2_test", m.group(0)[:80], df=df, stat=stat, p=p)
+        )
+    return claims

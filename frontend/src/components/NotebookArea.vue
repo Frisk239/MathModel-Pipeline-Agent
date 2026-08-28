@@ -3,7 +3,7 @@ import NotebookCell from "@/components/NotebookCell.vue";
 import { useStickyScroll } from "@/composables/useStickyScroll";
 import { useTaskStore } from "@/stores/task";
 import type { CodeCell, NoteCell, ResultCell } from "@/utils/interface";
-import { LoaderCircle } from "lucide-vue-next";
+import { LoaderCircle, SquareCode } from "lucide-vue-next";
 import { computed, ref } from "vue";
 
 // ---- Reactive State ----
@@ -49,12 +49,9 @@ const { onScroll } = useStickyScroll(scrollRef, () => cells.value);
 </script>
 
 <template>
-  <div ref="scrollRef" class="flex-1 px-1 pt-1 pb-4 h-full overflow-y-auto" @scroll="onScroll">
+  <div ref="scrollRef" class="notebook-scroll flex-1 px-1 pt-1 pb-4 h-full overflow-y-auto" @scroll="onScroll">
     <!-- 遍历所有单元格 -->
-    <div v-for="(cell, index) in cells" :key="index" :class="[
-      'transform transition-all duration-200 hover:shadow-lg',
-      cell.type === 'code' ? 'pt-2' : 'pt-0'
-    ]">
+    <div v-for="(cell, index) in cells" :key="index" :class="cell.type === 'code' ? 'pt-2' : 'pt-0'">
       <NotebookCell :cell="cell" />
     </div>
 
@@ -67,10 +64,10 @@ const { onScroll } = useStickyScroll(scrollRef, () => cells.value);
 
     <!-- 无内容时的提示 -->
     <div v-if="cells.length === 0" class="flex items-center justify-center h-full">
-      <div class="text-gray-400 text-center p-8">
-        <div class="text-4xl mb-2">📝</div>
-        <div class="text-lg font-medium">暂无代码执行结果</div>
-        <div class="text-sm">执行代码后将在此显示结果</div>
+      <div class="text-muted-foreground/70 text-center p-8">
+        <SquareCode class="mx-auto mb-2 h-8 w-8 opacity-60" />
+        <div class="text-sm font-medium">暂无代码执行结果</div>
+        <div class="text-xs mt-1">执行代码后将在此显示结果</div>
       </div>
     </div>
     <!-- 添加底部空间 -->
@@ -79,45 +76,26 @@ const { onScroll } = useStickyScroll(scrollRef, () => cells.value);
 </template>
 
 <style>
-/* 自定义滚动条 */
-::-webkit-scrollbar {
+/* 滚动条样式限定本容器，避免污染全站 */
+.notebook-scroll::-webkit-scrollbar {
   width: 0.375rem;
   height: 0.375rem;
 }
 
-::-webkit-scrollbar-track {
-  background-color: rgb(243 244 246);
+.notebook-scroll::-webkit-scrollbar-track {
+  background-color: rgb(243 244 246 / 0.6);
   border-radius: 9999px;
 }
 
-::-webkit-scrollbar-thumb {
+.notebook-scroll::-webkit-scrollbar-thumb {
   background-color: rgb(209 213 219);
   border-radius: 9999px;
 }
 
-::-webkit-scrollbar-thumb:hover {
+.notebook-scroll::-webkit-scrollbar-thumb:hover {
   background-color: rgb(156 163 175);
   transition-property: background-color;
   transition-duration: 200ms;
 }
 
-/* 代码高亮样式 */
-.hljs {
-  background-color: rgb(249 250 251);
-  padding: 1rem;
-  border-radius: 0.5rem;
-  margin-top: 0.5rem;
-  margin-bottom: 0.5rem;
-}
-
-/* 数学公式样式 */
-.katex-display {
-  margin-top: 1rem;
-  margin-bottom: 1rem;
-  overflow-x: auto;
-}
-
-.katex {
-  font-size: 1rem;
-}
 </style>

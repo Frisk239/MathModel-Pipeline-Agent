@@ -9,7 +9,7 @@ import time
 
 import requests
 
-BASE = os.environ.get("BACKEND_BASE_URL", "http://localhost:8001")
+BASE = os.environ.get("BACKEND_BASE_URL", "http://localhost:8000")
 
 
 def build_task():

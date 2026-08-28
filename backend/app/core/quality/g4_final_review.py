@@ -19,7 +19,14 @@ from app.core.quality.contracts import (
     RoadmapItem,
     Severity,
 )
-from app.core.quality.recompute import numeric_conservation
+from app.core.quality.recompute import (
+    RecomputeStatus,
+    df_n_consistency,
+    grim_mean_check,
+    numeric_conservation,
+    pvalue_recompute,
+    scan_statistical_claims,
+)
 
 DIMENSIONS = (
     "model_soundness 模型合理性",
@@ -55,14 +62,93 @@ G4_RECHECK_PROMPT = """你是修订核验员。先前终审给出以下问题清
 - 每条附修订稿中的证据位置。
 
 输出严格 JSON：
-{"judgements": [{"id": "<路线图条目id>", "status": "...", "evidence": "..."}],
- "new_issues_previously_missed": [{"problem": "...", "severity": "..."}]}
+{{"judgements": [{{"id": "<路线图条目id>", "status": "...", "evidence": "..."}}],
+ "new_issues_previously_missed": [{{"problem": "...", "severity": "..."}}]}}
 
 【路线图】
 {roadmap}
 
 【修订稿】
 {revised}"""
+
+
+# 声明总样本量的明确形式（宁缺毋滥：只认大写 N = <整数>；多个不同值时口径存疑，放弃）
+_STATED_N_RE = re.compile(r"(?<![A-Za-z0-9_])N\s*=\s*(\d+)(?![A-Za-z0-9_])")
+
+
+def _stated_n(paper_text: str) -> int | None:
+    """提取全文唯一的总样本量声明；无或多值返回 None。"""
+    ns = {int(m.group(1)) for m in _STATED_N_RE.finditer(paper_text)}
+    return ns.pop() if len(ns) == 1 else None
+
+
+def run_g4_mechanical_recompute(paper_text: str) -> list[RoadmapItem]:
+    """确定性算术验证：GRIM 均值可达性 + t/F/χ² p 值重算（无 LLM 参与）。
+
+    提取不到可重算的统计陈述（数学建模论文常见）时返回空列表——
+    不惩罚；mismatch 视为 critical must_fix（数值不可复算是硬伤）。
+    """
+    claims = list(scan_statistical_claims(paper_text))
+    items: list[RoadmapItem] = []
+    for i, claim in enumerate(claims, 1):
+        if claim.kind == "grim_mean":
+            result = grim_mean_check(claim.values["mean"], claim.values["n"])
+            label = "GRIM 均值可达性"
+        elif claim.kind in ("t_test", "f_test", "chi2_test"):
+            test = {"t_test": "t", "f_test": "f", "chi2_test": "chi2"}[claim.kind]
+            result = pvalue_recompute(
+                claim.values["p"], claim.values["stat"], claim.values["df"], test
+            )
+            label = f"{test} 检验 p 值重算"
+        else:
+            continue
+        if result.status != RecomputeStatus.MISMATCH:
+            continue  # consistent/不可算不拦；只有算得出且对不上才是硬伤
+        items.append(
+            RoadmapItem(
+                id=f"g4-recompute-{i}",
+                problem=f"〔{label}〕「{claim.snippet}」数值不可复算：{result.note}",
+                evidence_anchor=claim.snippet,
+                severity=Severity.CRITICAL,
+                obligation=Obligation.MUST_FIX,
+                cost_scope="section",
+                acceptance_criteria="修正报告数值使其与样本量/统计量的重算结果一致，或更正对应的统计陈述",
+                target="论文正文",
+            )
+        )
+
+    # df↔N 一致性观察项：t 检验的配对/独立身份无法从文本判定（df+1 与 df+2
+    # 两种隐含 N），仅当两种身份都对不上声明 N 时记录；severity=MINOR +
+    # CONSIDER，留痕不拦截，避免口径误判触发无意义修复循环
+    stated_n = _stated_n(paper_text)
+    if stated_n:
+        for i, claim in enumerate(claims, 1):
+            if claim.kind != "t_test":
+                continue
+            df = claim.values["df"]
+            checks = (
+                df_n_consistency(df, stated_n, "n_minus_1"),
+                df_n_consistency(df, stated_n, "n1_plus_n2_minus_2"),
+            )
+            if any(c.status == RecomputeStatus.CONSISTENT for c in checks):
+                continue
+            if all(c.status == RecomputeStatus.MISMATCH for c in checks):
+                items.append(
+                    RoadmapItem(
+                        id=f"g4-df-n-{i}",
+                        problem=(
+                            f"〔df↔N 一致性〕「{claim.snippet}」自由度隐含 "
+                            f"N={df + 1}/{df + 2}，与声明 N={stated_n} 均不符"
+                        ),
+                        evidence_anchor=claim.snippet,
+                        severity=Severity.MINOR,
+                        obligation=Obligation.CONSIDER,
+                        cost_scope="sentence",
+                        acceptance_criteria="核对样本量口径（总样本/组内）与 t 检验自由度，修正不一致处",
+                        target="论文正文",
+                    )
+                )
+    return items
 
 
 async def run_g4_final_review(
@@ -117,15 +203,21 @@ async def run_g4_final_review(
             )
         )
 
+    # 机械重算（GRIM/p 值）与 LLM 评审互补：确定性验证不依赖判官
+    mech_items = run_g4_mechanical_recompute(paper_text)
+    items.extend(mech_items)
+
     blocking = [it for it in items if it.obligation == Obligation.MUST_FIX]
+    mech_note = f"；机械重算：{len(mech_items)} 条不可复算" if mech_items else ""
     if not blocking:
         verdict = GateVerdict.MINOR if items else GateVerdict.PASS
-        summary = f"终审放行；维度：{dims_str}；{disclosure}"
+        summary = f"终审放行；维度：{dims_str}{mech_note}；{disclosure}"
     else:
         verdict = GateVerdict.MATERIAL
         summary = (
             f"终审退回：{len(blocking)} 条 must_fix"
-            f"（{sum(1 for i in blocking if i.severity == Severity.CRITICAL)} 条 critical）；{disclosure}"
+            f"（{sum(1 for i in blocking if i.severity == Severity.CRITICAL)} 条 critical）"
+            f"{mech_note}；{disclosure}"
         )
     return GateReport(gate=GateName.G4, verdict=verdict, items=items, summary=summary)
 

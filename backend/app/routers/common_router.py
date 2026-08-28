@@ -133,8 +133,10 @@ async def get_service_status(task_id: str | None = None):
 
         try:
             work_dir = get_work_dir(task_id)
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=404, detail=f"任务不存在: {task_id}"
+            ) from exc
 
         sm = TaskStateMachine.load(task_id, work_dir)
         if sm is None:

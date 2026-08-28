@@ -1,6 +1,8 @@
 """工作流模块，编排多 Agent 协作完成数学建模任务。"""
 
 import asyncio
+from dataclasses import dataclass
+from typing import Any
 import time
 from pathlib import Path
 
@@ -9,6 +11,7 @@ from app.core.task_state import TaskPhase, TaskStateMachine
 from app.core.quality.contracts import GateReport
 from app.core.quality.g1_data_gate import (
     check_data_completeness,
+    drop_template_attachments,
     extract_required_from_problem,
 )
 from app.core.quality.g3_text_gate import (
@@ -58,6 +61,35 @@ class WorkFlow:
         # RichPrinter.workflow_start()
         # RichPrinter.workflow_end()
         pass
+
+
+@dataclass
+class _PipelineContext:
+    """跨阶段共享的流水线上下文（_execute_impl 拆分引入）。
+
+    字段在阶段推进中逐步填充，None 表示尚未到达对应阶段。
+    """
+
+    problem: Problem
+    llm_factory: LLMFactory | None = None
+    coordinator_llm: Any = None
+    modeler_llm: Any = None
+    coder_llm: Any = None
+    writer_llm: Any = None
+    review_llm: Any = None
+    coordinator_agent: Any = None
+    coordinator_response: Any = None
+    modeler_agent: Any = None
+    modeler_response: Any = None
+    env_capability: str | None = None
+    user_output: Any = None
+    code_interpreter: Any = None
+    scholar: Any = None
+    exa: Any = None
+    coder_agent: Any = None
+    writer_agent: Any = None
+    flows: Any = None
+    config_template: Any = None
 
 
 class MathModelWorkFlow(WorkFlow):
@@ -287,10 +319,31 @@ class MathModelWorkFlow(WorkFlow):
             raise
 
     async def _execute_impl(self, problem: Problem) -> None:
-        """工作流主体。"""
+        """工作流主体：各阶段实现见 _run_* 方法，本方法只做编排。"""
         self.state.transition(TaskPhase.SPLITTING, note="开始拆题")
+        self._validate_llm_config()
 
-        # 在创建 LLM 前预校验配置，避免进入 Agent 循环后才发现缺配置
+        ctx = _PipelineContext(problem=problem)
+        ctx.llm_factory = LLMFactory(self.task_id)
+        (
+            ctx.coordinator_llm,
+            ctx.modeler_llm,
+            ctx.coder_llm,
+            ctx.writer_llm,
+        ) = ctx.llm_factory.get_all_llms()
+        ctx.review_llm = ctx.llm_factory.get_review_llm()
+
+        await self._run_coordinator(ctx)
+        await self._run_g1_gate(ctx)
+        await self._run_split_checkpoint(ctx)
+        await self._run_modeler_phase(ctx)
+        await self._prepare_coding_env(ctx)
+        await self._run_solution_steps(ctx)
+        await self._run_write_steps(ctx)
+        await self._run_final_review(ctx)
+
+    def _validate_llm_config(self) -> None:
+        """在创建 LLM 前预校验配置，避免进入 Agent 循环后才发现缺配置。"""
         missing = []
         for name, model_val, key_val in [
             ("Coordinator", settings.COORDINATOR_MODEL, settings.COORDINATOR_API_KEY),
@@ -305,14 +358,14 @@ class MathModelWorkFlow(WorkFlow):
         if missing:
             raise ValueError(f"以下配置缺失，请先在设置中填写并保存：{', '.join(missing)}")
 
-        llm_factory = LLMFactory(self.task_id)
-        coordinator_llm, modeler_llm, coder_llm, writer_llm = llm_factory.get_all_llms()
-
+    async def _run_coordinator(self, ctx: "_PipelineContext") -> None:
+        """拆题阶段：识别意图并产出问题清单与必需附件。"""
         coordinator_agent = CoordinatorAgent(
-            self.task_id, coordinator_llm,
+            self.task_id, ctx.coordinator_llm,
             context_window=settings.COORDINATOR_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
         )
+        ctx.coordinator_agent = coordinator_agent
 
         await redis_manager.publish_message(
             self.task_id,
@@ -322,21 +375,24 @@ class MathModelWorkFlow(WorkFlow):
         await self._check_cancelled()
 
         try:
-            coordinator_response = await coordinator_agent.run(problem.ques_all)
-            self.questions = coordinator_response.questions
-            self.ques_count = coordinator_response.ques_count
+            ctx.coordinator_response = await coordinator_agent.run(ctx.problem.ques_all)
+            self.questions = ctx.coordinator_response.questions
+            self.ques_count = ctx.coordinator_response.ques_count
         except Exception as e:
             #  非数学建模问题
             logger.error(f"CoordinatorAgent 执行失败: {e}")
             raise e
 
-        ################################################ G1 数据完备性门
+    async def _run_g1_gate(self, ctx: "_PipelineContext") -> None:
+        """G1 数据完备性门：material 时 AUTO_MODE 降级 / 人工三分支。"""
         self.state.transition(TaskPhase.G1_GATE, note="拆题完成，校验数据完备性")
-        # 所需附件 = Coordinator 声明 ∪ 题面正则提取（双保险）
+        # 所需附件 = Coordinator 声明（先剔除题面全为模板句的附件）∪ 题面正则提取（双保险）
         required = list(
             dict.fromkeys(
-                coordinator_response.required_files
-                + extract_required_from_problem(problem.ques_all)
+                drop_template_attachments(
+                    ctx.coordinator_response.required_files, ctx.problem.ques_all
+                )
+                + extract_required_from_problem(ctx.problem.ques_all)
             )
         )
         g1_report = check_data_completeness(required, self.work_dir)
@@ -383,127 +439,128 @@ class MathModelWorkFlow(WorkFlow):
                 )
         self.state.transition(TaskPhase.MODELING, note="数据完备，进入建模")
 
-        # 检查点①：拆题结果人工审批
-        if self._checkpoint_enabled("problem_split"):
+    async def _run_split_checkpoint(self, ctx: "_PipelineContext") -> None:
+        """检查点①：拆题结果人工审批（revise 注入意见重跑拆题）。"""
+        if not self._checkpoint_enabled("problem_split"):
+            return
 
-            def _ques_preview() -> str:
-                qs = {
-                    k: v
-                    for k, v in self.questions.items()
-                    if k.startswith("ques") and k != "ques_count"
-                }
-                return "\n".join(
-                    f"{i}. {v}" for i, (_, v) in enumerate(sorted(qs.items()), 1)
-                )[:2000]
+        def _ques_preview() -> str:
+            qs = {
+                k: v
+                for k, v in self.questions.items()
+                if k.startswith("ques") and k != "ques_count"
+            }
+            return "\n".join(
+                f"{i}. {v}" for i, (_, v) in enumerate(sorted(qs.items()), 1)
+            )[:2000]
 
-            async def _split_revise(feedback: str) -> None:
-                """人工意见注入 Coordinator 对话历史，重跑拆题。"""
-                nonlocal coordinator_response
-                coordinator_agent.chat_history.clear()
-                coordinator_response = await coordinator_agent.run(
-                    problem.ques_all
-                    + f"\n\n【人工审批意见，请据此调整问题拆解】\n{feedback}"
-                )
-                self.questions = coordinator_response.questions
-                self.ques_count = coordinator_response.ques_count
-
-            await self._run_checkpoint(
-                "split_review",
-                lambda: {
-                    "title": "问题拆解审批",
-                    "summary": f"共拆解 {self.ques_count} 个问题",
-                    "questions": _ques_preview(),
-                    "options": ["approve", "revise", "reject"],
-                },
-                revise_fn=_split_revise,
+        async def _split_revise(feedback: str) -> None:
+            """人工意见注入 Coordinator 对话历史，重跑拆题。"""
+            ctx.coordinator_agent.chat_history.clear()
+            ctx.coordinator_response = await ctx.coordinator_agent.run(
+                ctx.problem.ques_all
+                + f"\n\n【人工审批意见，请据此调整问题拆解】\n{feedback}"
             )
-            await redis_manager.publish_message(
-                self.task_id, SystemMessage(content="拆题审批通过", type="success")
-            )
+            self.questions = ctx.coordinator_response.questions
+            self.ques_count = ctx.coordinator_response.ques_count
 
+        await self._run_checkpoint(
+            "split_review",
+            lambda: {
+                "title": "问题拆解审批",
+                "summary": f"共拆解 {self.ques_count} 个问题",
+                "questions": _ques_preview(),
+                "options": ["approve", "revise", "reject"],
+            },
+            revise_fn=_split_revise,
+        )
+        await redis_manager.publish_message(
+            self.task_id, SystemMessage(content="拆题审批通过", type="success")
+        )
+
+    async def _run_modeler_phase(self, ctx: "_PipelineContext") -> None:
+        """建模阶段 + 检查点②（方案审批，带 AI 预审参谋，advisory 不替人决策）。"""
         await redis_manager.publish_message(
             self.task_id,
             SystemMessage(content="识别用户意图和拆解问题完成,任务转交给建模手"),
         )
-
         await redis_manager.publish_message(
             self.task_id,
             SystemMessage(content="建模手开始建模ing..."),
         )
-
         await self._check_cancelled()
 
         modeler_agent = ModelerAgent(
-            self.task_id, modeler_llm,
+            self.task_id, ctx.modeler_llm,
             context_window=settings.MODELER_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
         )
+        ctx.modeler_agent = modeler_agent
 
         # v3/F2：注入实测环境能力清单，方案承诺的求解器必须限制在清单内（灭求解器幻觉）
-        env_capability_text = get_capability_description(
+        ctx.env_capability = get_capability_description(
             "remote" if settings.E2B_API_KEY else "local"
         )
 
-        modeler_response = await modeler_agent.run(
-            coordinator_response, env_capability=env_capability_text
+        ctx.modeler_response = await modeler_agent.run(
+            ctx.coordinator_response, env_capability=ctx.env_capability
         )
 
-        # 检查点②：建模方案人工审批（带 AI 预审参谋，advisory 不替人决策）
-        review_llm = llm_factory.get_review_llm()
-        if self._checkpoint_enabled("model_selection"):
-            import json as _json
+        if not self._checkpoint_enabled("model_selection"):
+            return
+        import json as _json
 
-            def _plan_text() -> str:
-                return _json.dumps(
-                    getattr(modeler_response, "questions_solution", {}),
-                    ensure_ascii=False,
-                )[:4000]
+        def _plan_text() -> str:
+            return _json.dumps(
+                getattr(ctx.modeler_response, "questions_solution", {}),
+                ensure_ascii=False,
+            )[:4000]
 
-            advisory = await self._pre_review_advisory(review_llm, _plan_text())
+        advisory = await self._pre_review_advisory(ctx.review_llm, _plan_text())
 
-            async def _model_revise(feedback: str) -> None:
-                nonlocal modeler_response
-                await modeler_agent.append_chat_history(
-                    {
-                        "role": "user",
-                        "content": f"【人工审批意见，请据此修订建模方案】\n{feedback}",
-                    }
-                )
-                modeler_response = await modeler_agent.run(
-                    coordinator_response, env_capability=env_capability_text
-                )
-
-            await self._run_checkpoint(
-                "model_review",
-                lambda: {
-                    "title": "建模方案审批",
-                    "plan": _plan_text(),
-                    "ai_advisory": advisory,
-                    "options": ["approve", "revise", "reject"],
-                },
-                revise_fn=_model_revise,
+        async def _model_revise(feedback: str) -> None:
+            await ctx.modeler_agent.append_chat_history(
+                {
+                    "role": "user",
+                    "content": f"【人工审批意见，请据此修订建模方案】\n{feedback}",
+                }
+            )
+            ctx.modeler_response = await ctx.modeler_agent.run(
+                ctx.coordinator_response, env_capability=ctx.env_capability
             )
 
-        user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
+        await self._run_checkpoint(
+            "model_review",
+            lambda: {
+                "title": "建模方案审批",
+                "plan": _plan_text(),
+                "ai_advisory": advisory,
+                "options": ["approve", "revise", "reject"],
+            },
+            revise_fn=_model_revise,
+        )
 
+    async def _prepare_coding_env(self, ctx: "_PipelineContext") -> None:
+        """创建编码/写作所需的运行环境：解释器、检索、Agent 实例、Flows。"""
         await redis_manager.publish_message(
             self.task_id,
             SystemMessage(content="正在创建代码沙盒环境"),
         )
+        ctx.user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
 
         notebook_serializer = NotebookSerializer(work_dir=self.work_dir)
-        code_interpreter = await create_interpreter(
+        ctx.code_interpreter = await create_interpreter(
             kind="local",
             task_id=self.task_id,
             work_dir=self.work_dir,
             notebook_serializer=notebook_serializer,
             timeout=3000,
         )
-        
+
         # OpenAlex 未配置邮箱时不阻断任务，Writer 搜索时降级
-        scholar: OpenAlexScholar | None = None
+        ctx.scholar = None
         if settings.OPENALEX_EMAIL:
-            scholar = OpenAlexScholar(
+            ctx.scholar = OpenAlexScholar(
                 task_id=self.task_id,
                 email=settings.OPENALEX_EMAIL,
                 api_key=settings.OPENALEX_API_KEY,
@@ -511,49 +568,50 @@ class MathModelWorkFlow(WorkFlow):
         else:
             logger.warning("未配置 OPENALEX_EMAIL，论文手文献检索将降级")
 
-        exa = ExaSearch(api_key=settings.EXA_API_KEY) if settings.EXA_API_KEY else None
-        if exa is None:
+        ctx.exa = ExaSearch(api_key=settings.EXA_API_KEY) if settings.EXA_API_KEY else None
+        if ctx.exa is None:
             logger.warning("未配置 EXA_API_KEY，论文手语义搜索将不可用")
 
         await redis_manager.publish_message(
             self.task_id,
             SystemMessage(content="创建完成"),
         )
-
         await redis_manager.publish_message(
             self.task_id,
             SystemMessage(content="初始化代码手"),
         )
         self.state.transition(TaskPhase.CODING, note="进入求解循环")
 
-        # modeler_agent
-        coder_agent = CoderAgent(
-            task_id=problem.task_id,
-            model=coder_llm,
+        ctx.coder_agent = CoderAgent(
+            task_id=ctx.problem.task_id,
+            model=ctx.coder_llm,
             work_dir=self.work_dir,
             max_chat_turns=settings.MAX_CHAT_TURNS,
             max_retries=settings.MAX_RETRIES,
-            code_interpreter=code_interpreter,
+            code_interpreter=ctx.code_interpreter,
             context_window=settings.CODER_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
         )
 
-        writer_agent = WriterAgent(
-            task_id=problem.task_id,
-            model=writer_llm,
-            comp_template=problem.comp_template,
-            format_output=problem.format_output,
-            scholar=scholar,
-            exa=exa,
+        ctx.writer_agent = WriterAgent(
+            task_id=ctx.problem.task_id,
+            model=ctx.writer_llm,
+            comp_template=ctx.problem.comp_template,
+            format_output=ctx.problem.format_output,
+            scholar=ctx.scholar,
+            exa=ctx.exa,
             context_window=settings.WRITER_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
         )
 
-        flows = Flows(self.questions, env_capability=env_capability_text)
+        ctx.flows = Flows(self.questions, env_capability=ctx.env_capability)
+        ctx.config_template = get_config_template(ctx.problem.comp_template)
 
-        ################################################ solution steps
-        solution_flows = flows.get_solution_flows(self.questions, modeler_response)
-        config_template = get_config_template(problem.comp_template)
+    async def _run_solution_steps(self, ctx: "_PipelineContext") -> None:
+        """逐问求解：Coder 编码 + G2 质量门修复回路 + Writer 写对应章节。"""
+        solution_flows = ctx.flows.get_solution_flows(
+            self.questions, ctx.modeler_response
+        )
 
         for key, value in solution_flows.items():
             await self._check_cancelled()
@@ -565,184 +623,24 @@ class MathModelWorkFlow(WorkFlow):
 
             coder_prompt = value["coder_prompt"]
             subtask_started_at = time.time()  # v3/P2-3：本问交付物溯源与归档的时间基准
-            coder_response = await coder_agent.run(
+            coder_response = await ctx.coder_agent.run(
                 prompt=coder_prompt, subtask_title=key
             )
 
-            # G2 代码质量门：L1 脚本 + L2 AI 评审，MATERIAL 定向修复（≤3 轮）
-            import os as _os
-
-            import json as _json2
-
-            model_plan_text = _json2.dumps(
-                getattr(modeler_response, "questions_solution", {}),
-                ensure_ascii=False,
+            coder_response = await self._run_g2_repair_loop(
+                ctx, key, coder_prompt, subtask_started_at, coder_response
             )
-            nb_path = _os.path.join(self.work_dir, "notebook.ipynb")
-            g2_prior_items: list[str] | None = None
-            while settings.QUALITY_GATES_ENABLED:
-                l1_items = check_notebook_artifacts(
-                    nb_path,
-                    self.work_dir,
-                    coder_response.created_images,
-                    deliverable_since=subtask_started_at,
-                )
-                l2_report = await run_g2_ai_review(
-                    review_llm,
-                    nb_path,
-                    model_plan_text,
-                    coder_response.code_response or "",
-                    problem.ques_all,
-                    prior_items=g2_prior_items,
-                )
-                g2_report = combine_g2(l1_items, l2_report)
-                g2_prior_items = [it.problem for it in g2_report.items]
-                g2_report.round_no = self.state.repair_used("g2")
-                self.gate_reports.append(g2_report)
-                if g2_report.verdict.value != "material":
-                    break
-
-                # v3/P2-4：分级聚焦的修复指令（critical/major 必须解决，minor 明示延后）
-                roadmap_text = format_repair_roadmap(g2_report.items)
-                # 报错 cell 类问题给出定向清理指令（重跑全任务不会清掉旧 cell）
-                if any("报错输出" in it.problem or "notebook cell" in it.problem for it in g2_report.items):
-                    roadmap_text += (
-                        "\n\n【报错 cell 专项指令】以上报错 cell 必须逐个处理："
-                        "定位对应 cell，修复其代码或直接删除该 cell 后重跑，"
-                        "禁止保留报错的历史尝试 cell；其余已成功的代码保持不变。"
-                    )
-                try:
-                    round_no = self.state.request_repair("g2")
-                except Exception:
-                    # v3/P2-5：主因为"方案未实现"（F4 方案过重）且该问未回退过 →
-                    # 回退第二候选给 +1 轮，优于带一串 critical 落款降级放行。
-                    # 仅 AUTO_MODE 生效：人工模式把决策权留给人（revise 可写"改用候选2"）。
-                    if (
-                        settings.AUTO_MODE
-                        and key not in self._g2_fallback_used
-                        and is_plan_fallback_candidate(g2_report.items)
-                    ):
-                        self._g2_fallback_used.add(key)
-                        self.state.repair_rounds["g2"] = (
-                            self.state.repair_used("g2") + 1
-                        )
-                        self.state.save()
-                        round_no = self.state.repair_used("g2")
-                        self.state.record_auto_degrade(
-                            "g2_plan_fallback",
-                            f"({key}) 方案超出实现预算（{g2_report.summary}），"
-                            "自动回退建模候选矩阵的第二候选并追加一轮",
-                        )
-                        archived_fb = archive_stale_deliverables(
-                            self.work_dir, round_no, since=subtask_started_at
-                        )
-                        plan_excerpt = str(
-                            modeler_response.questions_solution.get(key, "")
-                        )[:1500]
-                        roadmap_text = (
-                            "【方案回退指令】原方案在修复轮耗尽后仍无法实现"
-                            f"（门报告：{g2_report.summary}）。判定主因：方案复杂度"
-                            "超出实现预算。要求改用建模方案候选矩阵中的第二候选模型"
-                            "（或更简单的可执行候选）：\n"
-                            "1. 先用最简结构跑通主链路：核心决策变量→目标→关键约束→"
-                            "求解→结果文件写出\n"
-                            "2. 原方案中预算内无法实现的复杂结构（如大M半连续、复杂"
-                            "滚动窗口），要么给出等价简化实现，要么在执行总结中如实"
-                            "记录差异与理由\n"
-                            "3. 环境能力清单仍然有效，求解器只能用清单内可用项\n"
-                            f"【原方案节选】{plan_excerpt}"
-                        )
-                        if archived_fb:
-                            roadmap_text += (
-                                "\n（上轮交付物已归档至 _retry_archive/，禁止读取，"
-                                "本轮必须端到端重新生成）"
-                            )
-                        await redis_manager.publish_message(
-                            self.task_id,
-                            SystemMessage(
-                                content=f"({key}) 方案超预算，自动回退第二候选（+1 轮）",
-                                type="warning",
-                            ),
-                        )
-                        coder_prompt = (
-                            f"{coder_prompt}\n\n{roadmap_text}"
-                        )
-                        coder_response = await coder_agent.run(
-                            prompt=coder_prompt, subtask_title=key
-                        )
-                        continue
-                    if settings.AUTO_MODE:
-                        # 全自动模式：耗尽自动降级放行（遗留如实记录，与人工决策区分审计）
-                        self.state.record_auto_degrade(
-                            "g2", f"({key}) {g2_report.summary}"
-                        )
-                        self.g2_leftover_items.extend(g2_report.items)
-                        break
-                    # 轮次耗尽 → 人工三选一（决策记录在案）
-                    # 动作词表与检查点统一：approve=放行 / revise=带意见追加轮 / reject=中止
-                    decision = await wait_for_approval(
-                        self.task_id,
-                        self.state,
-                        "g2_exhausted",
-                        {
-                            "title": f"G2 修复轮次耗尽（{key}）",
-                            "report": g2_report.summary,
-                            "roadmap": roadmap_text[:2000],
-                            "options": ["approve", "revise", "reject"],
-                        },
-                    )
-                    if decision.action == "approve":
-                        # 人工带问题放行：G2 遗留同样写入论文局限性章节（不静默吞掉）
-                        self.g2_leftover_items.extend(g2_report.items)
-                        break
-                    if decision.action == "reject":
-                        raise asyncio.CancelledError("人工中止（G2 轮次耗尽）")
-                    # revise：人工授权追加一轮（记录绕过 cap 的授权）
-                    self.state.repair_rounds["g2"] = (
-                        self.state.repair_used("g2") + 1
-                    )
-                    self.state.save()
-                    round_no = self.state.repair_used("g2")
-                    if decision.feedback:
-                        roadmap_text += f"\n【人工补充意见】{decision.feedback}"
-
-                # v3/P2-3：归档本问上轮交付物，防止新一轮读取遗留产物冒充本轮产出
-                # （只动 mtime>=subtask_started_at 的本问产物，此前问次的合法产物不动）
-                archived = archive_stale_deliverables(
-                    self.work_dir, round_no, since=subtask_started_at
-                )
-                if archived:
-                    roadmap_text += (
-                        "\n\n【交付物溯源指令】上一轮交付物（"
-                        f"{'、'.join(archived[:5])}）已归档至 "
-                        f"_retry_archive/round{round_no}/（仅供审计，禁止读取）。"
-                        "本轮必须由 notebook 代码端到端重新生成全部结果文件，"
-                        "禁止把读取到的既有文件内容当作本轮求解结果。"
-                    )
-
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(
-                        content=f"G2 门拦截（{key}），第 {round_no} 轮定向修复",
-                        type="warning",
-                    ),
-                )
-                coder_prompt = (
-                    f"{coder_prompt}\n\n【上一轮代码未通过质量门，必须修复以下问题】\n"
-                    f"{roadmap_text}\n"
-                    "要求：修复上述问题后重新求解本问。"
-                )
-                coder_response = await coder_agent.run(
-                    prompt=coder_prompt, subtask_title=key
-                )
 
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(content=f"代码手求解成功{key}", type="success"),
             )
 
-            writer_prompt = flows.get_writer_prompt(
-                key, coder_response.code_response or "", code_interpreter, config_template
+            writer_prompt = ctx.flows.get_writer_prompt(
+                key,
+                coder_response.code_response or "",
+                ctx.code_interpreter,
+                ctx.config_template,
             )
 
             await redis_manager.publish_message(
@@ -752,11 +650,11 @@ class MathModelWorkFlow(WorkFlow):
 
             ## TODO: 图片引用错误
             writer_response = await self._write_section_with_gate(
-                writer_agent,
+                ctx.writer_agent,
                 prompt=writer_prompt,
                 available_images=coder_response.created_images,
                 sub_title=key,
-                exempt_text=problem.ques_all,
+                exempt_text=ctx.problem.ques_all,
             )
 
             await redis_manager.publish_message(
@@ -764,17 +662,223 @@ class MathModelWorkFlow(WorkFlow):
                 SystemMessage(content=f"论文手完成{key}部分"),
             )
 
-            user_output.set_res(key, writer_response)
+            ctx.user_output.set_res(key, writer_response)
 
         # 关闭沙盒
+        await ctx.code_interpreter.cleanup()
+        logger.info(ctx.user_output.get_res())
 
-        await code_interpreter.cleanup()
-        logger.info(user_output.get_res())
+    async def _run_g2_repair_loop(
+        self,
+        ctx: "_PipelineContext",
+        key: str,
+        coder_prompt: str,
+        subtask_started_at: float,
+        coder_response,
+    ):
+        """G2 代码质量门：L1 脚本 + L2 AI 评审，MATERIAL 定向修复（≤3 轮）。
 
-        ################################################ write steps
+        含 P2-4 分级修复指令、P2-3 交付物归档、P2-5 方案回退、AUTO_MODE
+        降级放行与人工三分支。
+        """
+        import os as _os
 
-        write_flows = flows.get_write_flows(
-            user_output, config_template, problem.ques_all
+        import json as _json2
+
+        model_plan_text = _json2.dumps(
+            getattr(ctx.modeler_response, "questions_solution", {}),
+            ensure_ascii=False,
+        )
+        nb_path = _os.path.join(self.work_dir, "notebook.ipynb")
+        g2_prior_items: list[str] | None = None
+        while settings.QUALITY_GATES_ENABLED:
+            l1_items = check_notebook_artifacts(
+                nb_path,
+                self.work_dir,
+                coder_response.created_images,
+                deliverable_since=subtask_started_at,
+            )
+            l2_report = await run_g2_ai_review(
+                ctx.review_llm,
+                nb_path,
+                model_plan_text,
+                coder_response.code_response or "",
+                ctx.problem.ques_all,
+                prior_items=g2_prior_items,
+            )
+            g2_report = combine_g2(l1_items, l2_report)
+            g2_prior_items = [it.problem for it in g2_report.items]
+            g2_report.round_no = self.state.repair_used("g2")
+            self.gate_reports.append(g2_report)
+            if g2_report.verdict.value != "material":
+                break
+
+            # v3/P2-4：分级聚焦的修复指令（critical/major 必须解决，minor 明示延后）
+            roadmap_text = format_repair_roadmap(g2_report.items)
+            # 报错 cell 类问题给出定向清理指令（重跑全任务不会清掉旧 cell）
+            if any("报错输出" in it.problem or "notebook cell" in it.problem for it in g2_report.items):
+                roadmap_text += (
+                    "\n\n【报错 cell 专项指令】以上报错 cell 必须逐个处理："
+                    "定位对应 cell，修复其代码或直接删除该 cell 后重跑，"
+                    "禁止保留报错的历史尝试 cell；其余已成功的代码保持不变。"
+                )
+            try:
+                round_no = self.state.request_repair("g2")
+            except Exception:
+                # v3/P2-5：修复轮耗尽 → 先试方案回退（+1 轮），否则降级/人工决策
+                fallback = await self._g2_plan_fallback(
+                    ctx, key, g2_report, roadmap_text, subtask_started_at
+                )
+                if fallback is not None:
+                    round_no, roadmap_text = fallback
+                    coder_prompt = f"{coder_prompt}\n\n{roadmap_text}"
+                    coder_response = await ctx.coder_agent.run(
+                        prompt=coder_prompt, subtask_title=key
+                    )
+                    continue
+                action, extra = await self._g2_exhausted_decision(
+                    key, g2_report, roadmap_text
+                )
+                if action == "break":
+                    break
+                round_no = self.state.repair_used("g2")
+                roadmap_text += extra
+
+            # v3/P2-3：归档本问上轮交付物，防止新一轮读取遗留产物冒充本轮产出
+            # （只动 mtime>=subtask_started_at 的本问产物，此前问次的合法产物不动）
+            archived = archive_stale_deliverables(
+                self.work_dir, round_no, since=subtask_started_at
+            )
+            if archived:
+                roadmap_text += (
+                    "\n\n【交付物溯源指令】上一轮交付物（"
+                    f"{'、'.join(archived[:5])}）已归档至 "
+                    f"_retry_archive/round{round_no}/（仅供审计，禁止读取）。"
+                    "本轮必须由 notebook 代码端到端重新生成全部结果文件，"
+                    "禁止把读取到的既有文件内容当作本轮求解结果。"
+                )
+
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content=f"G2 门拦截（{key}），第 {round_no} 轮定向修复",
+                    type="warning",
+                ),
+            )
+            coder_prompt = (
+                f"{coder_prompt}\n\n【上一轮代码未通过质量门，必须修复以下问题】\n"
+                f"{roadmap_text}\n"
+                "要求：修复上述问题后重新求解本问。"
+            )
+            coder_response = await ctx.coder_agent.run(
+                prompt=coder_prompt, subtask_title=key
+            )
+        return coder_response
+
+    async def _g2_plan_fallback(
+        self,
+        ctx: "_PipelineContext",
+        key: str,
+        g2_report,
+        roadmap_text: str,
+        subtask_started_at: float,
+    ) -> tuple[int, str] | None:
+        """P2-5 方案回退：主因为"方案未实现"（方案过重）且该问未回退过时，
+        回退第二候选给 +1 轮，优于带一串 critical 落款降级放行。
+
+        仅 AUTO_MODE 生效：人工模式把决策权留给人（revise 可写"改用候选2"）。
+        不满足回退条件返回 None，由调用方走降级/人工分支。
+        """
+        if not (
+            settings.AUTO_MODE
+            and key not in self._g2_fallback_used
+            and is_plan_fallback_candidate(g2_report.items)
+        ):
+            return None
+        self._g2_fallback_used.add(key)
+        self.state.repair_rounds["g2"] = self.state.repair_used("g2") + 1
+        self.state.save()
+        round_no = self.state.repair_used("g2")
+        self.state.record_auto_degrade(
+            "g2_plan_fallback",
+            f"({key}) 方案超出实现预算（{g2_report.summary}），"
+            "自动回退建模候选矩阵的第二候选并追加一轮",
+        )
+        archived_fb = archive_stale_deliverables(
+            self.work_dir, round_no, since=subtask_started_at
+        )
+        plan_excerpt = str(
+            ctx.modeler_response.questions_solution.get(key, "")
+        )[:1500]
+        fallback_text = (
+            "【方案回退指令】原方案在修复轮耗尽后仍无法实现"
+            f"（门报告：{g2_report.summary}）。判定主因：方案复杂度"
+            "超出实现预算。要求改用建模方案候选矩阵中的第二候选模型"
+            "（或更简单的可执行候选）：\n"
+            "1. 先用最简结构跑通主链路：核心决策变量→目标→关键约束→"
+            "求解→结果文件写出\n"
+            "2. 原方案中预算内无法实现的复杂结构（如大M半连续、复杂"
+            "滚动窗口），要么给出等价简化实现，要么在执行总结中如实"
+            "记录差异与理由\n"
+            "3. 环境能力清单仍然有效，求解器只能用清单内可用项\n"
+            f"【原方案节选】{plan_excerpt}"
+        )
+        if archived_fb:
+            fallback_text += (
+                "\n（上轮交付物已归档至 _retry_archive/，禁止读取，"
+                "本轮必须端到端重新生成）"
+            )
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(
+                content=f"({key}) 方案超预算，自动回退第二候选（+1 轮）",
+                type="warning",
+            ),
+        )
+        return round_no, fallback_text
+
+    async def _g2_exhausted_decision(
+        self, key: str, g2_report, roadmap_text: str
+    ) -> tuple[str, str]:
+        """修复轮耗尽处置：AUTO_MODE 降级放行，或人工三分支。
+
+        返回 ("break", "") 放行；("continue", 附加指令) 授权追加一轮；
+        reject 直接抛 CancelledError 中止任务。
+        """
+        if settings.AUTO_MODE:
+            # 全自动模式：耗尽自动降级放行（遗留如实记录，与人工决策区分审计）
+            self.state.record_auto_degrade("g2", f"({key}) {g2_report.summary}")
+            self.g2_leftover_items.extend(g2_report.items)
+            return "break", ""
+        # 轮次耗尽 → 人工三选一（决策记录在案）
+        # 动作词表与检查点统一：approve=放行 / revise=带意见追加轮 / reject=中止
+        decision = await wait_for_approval(
+            self.task_id,
+            self.state,
+            "g2_exhausted",
+            {
+                "title": f"G2 修复轮次耗尽（{key}）",
+                "report": g2_report.summary,
+                "roadmap": roadmap_text[:2000],
+                "options": ["approve", "revise", "reject"],
+            },
+        )
+        if decision.action == "approve":
+            # 人工带问题放行：G2 遗留同样写入论文局限性章节（不静默吞掉）
+            self.g2_leftover_items.extend(g2_report.items)
+            return "break", ""
+        if decision.action == "reject":
+            raise asyncio.CancelledError("人工中止（G2 轮次耗尽）") from None
+        # revise：人工授权追加一轮（记录绕过 cap 的授权）
+        self.state.repair_rounds["g2"] = self.state.repair_used("g2") + 1
+        self.state.save()
+        extra = f"\n【人工补充意见】{decision.feedback}" if decision.feedback else ""
+        return "continue", extra
+
+    async def _run_write_steps(self, ctx: "_PipelineContext") -> None:
+        """write steps：结论性章节（摘要/评价等）写作。"""
+        write_flows = ctx.flows.get_write_flows(
+            ctx.user_output, ctx.config_template, ctx.problem.ques_all
         )
         for key, value in write_flows.items():
             await self._check_cancelled()
@@ -785,20 +889,23 @@ class MathModelWorkFlow(WorkFlow):
             )
 
             writer_response = await self._write_section_with_gate(
-                writer_agent,
+                ctx.writer_agent,
                 prompt=value,
                 available_images=None,
                 sub_title=key,
-                exempt_text=problem.ques_all,
+                exempt_text=ctx.problem.ques_all,
             )
 
-            user_output.set_res(key, writer_response)
+            ctx.user_output.set_res(key, writer_response)
 
-        logger.info(user_output.get_res())
+        logger.info(ctx.user_output.get_res())
 
-        ################################################ 组装、引用完整性、G4 终审
+    async def _run_final_review(self, ctx: "_PipelineContext") -> None:
+        """组装、G3 引用完整性、G4 终审与复核、检查点④、遗留落局限性。"""
+        import os as _os
+
         self.state.transition(TaskPhase.ASSEMBLING, note="论文组装")
-        user_output.save_result()
+        ctx.user_output.save_result()
 
         res_md = Path(self.work_dir) / "res.md"
         if res_md.exists() and settings.QUALITY_GATES_ENABLED:
@@ -825,7 +932,7 @@ class MathModelWorkFlow(WorkFlow):
             settings.REVIEW_MODEL is None or settings.REVIEW_MODEL == settings.COORDINATOR_MODEL
         )
         paper_text = res_md.read_text(encoding="utf-8") if res_md.exists() else ""
-        g4_report = await run_g4_final_review(review_llm, paper_text, same_family)
+        g4_report = await run_g4_final_review(ctx.review_llm, paper_text, same_family)
         self.gate_reports.append(g4_report)
         leftover_items = []
 
@@ -836,7 +943,7 @@ class MathModelWorkFlow(WorkFlow):
 
             async def _paper_revise(feedback: str) -> None:
                 """人工意见定向重写评价章并重组装（Writer 共享对话上下文）。"""
-                await writer_agent.append_chat_history(
+                await ctx.writer_agent.append_chat_history(
                     {
                         "role": "user",
                         "content": (
@@ -846,14 +953,16 @@ class MathModelWorkFlow(WorkFlow):
                         ),
                     }
                 )
-                resp = await writer_agent.run(
+                resp = await ctx.writer_agent.run(
                     "基于人工终稿意见重写第七章（模型的评价、改进与推广），输出完整章节。",
                     sub_title="judge",
                 )
                 from app.schemas.A2A import WriterResponse as _WR
 
-                user_output.set_res("judge", _WR(response_content=resp.response_content, footnotes=[]))
-                user_output.save_result()
+                ctx.user_output.set_res(
+                    "judge", _WR(response_content=resp.response_content, footnotes=[])
+                )
+                ctx.user_output.save_result()
 
             while not g4_passed:
                 if settings.AUTO_MODE:
@@ -887,7 +996,7 @@ class MathModelWorkFlow(WorkFlow):
                 await _paper_revise(decision.feedback)
                 new_text = res_md.read_text(encoding="utf-8") if res_md.exists() else ""
                 recheck = await run_g4_recheck(
-                    review_llm, roadmap_items, new_text, paper_text
+                    ctx.review_llm, roadmap_items, new_text, paper_text
                 )
                 self.gate_reports.append(recheck)
                 await redis_manager.publish_message(
@@ -933,3 +1042,5 @@ class MathModelWorkFlow(WorkFlow):
             from app.utils.common_utils import md_2_docx
 
             md_2_docx(self.task_id)
+
+        # 在创建 LLM 前预校验配置，避免进入 Agent 循环后才发现缺配置

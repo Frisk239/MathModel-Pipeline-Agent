@@ -23,29 +23,68 @@ def _normalize_for_match(name: str) -> str:
     return re.sub(r"\s+", "", name).lower()
 
 
+_ATTACHMENT_PAT = re.compile(
+    r"((?:附件|attachment|appendix)\s*[0-9０-９一二三四五六七八九十]+)", re.IGNORECASE
+)
+_ATTACHMENT_NUM_PAT = re.compile(r"(?:附件|attachment|appendix)(\d+)")
+_TEMPLATE_CTX = ("result", "模板", "template", "提交结果")
+_SENT_SEP = "。；;！!？?\n"
+
+
+def _attachment_numbers(name: str) -> set[str]:
+    """附件名里的阿拉伯数字编号集合（归一后提取），供编号级比对。"""
+    return set(_ATTACHMENT_NUM_PAT.findall(_normalize_for_match(name)))
+
+
 def extract_required_from_problem(ques_all: str) -> list[str]:
     """从题面文本提取附件引用（正则兜底，与 Coordinator 声明取并集）。
 
     匹配 "附件1/附件 1/附件一/Attachment 1/appendix1" 等变体。
+    模板类附件（须提交结果的模板文件）是可选输入，不列入必需清单。
     """
     normalized = unicodedata.normalize("NFKC", ques_all)
-    # 模板类附件（须提交结果的模板文件）是可选输入，不列入必需清单：
-    # 匹配附件名后 20 字符的上下文，含模板特征词则跳过
-    _TEMPLATE_CTX = ("result", "模板", "template", "提交结果")
-    pat = re.compile(
-        r"((?:附件|attachment|appendix)\s*[0-9０-９一二三四五六七八九十]+)", re.IGNORECASE
-    )
     seen: list[str] = []
-    for m in pat.finditer(normalized):
+    for m in _ATTACHMENT_PAT.finditer(normalized):
         name = m.group(1)
         key = _normalize_for_match(name)
         if key in seen:
             continue
-        context = normalized[m.end() : m.end() + 20].lower()
-        if any(t in context for t in _TEMPLATE_CTX):
+        # 模板词既可能在附件名之后（"附件 3 须提交结果的模板文件"），
+        # 也可能在之前（2024-C 官方题面："模板文件见附件 3"）。
+        # 判定限定在附件名所在句子内，防止跨句窗口误吞相邻句的 result 字样
+        sent_start = max(normalized.rfind(ch, 0, m.start()) for ch in _SENT_SEP) + 1
+        ends = [pos for pos in (normalized.find(ch, m.end()) for ch in _SENT_SEP) if pos != -1]
+        sent_end = min(ends) if ends else len(normalized)
+        sentence = normalized[sent_start:sent_end].lower()
+        if any(t in sentence for t in _TEMPLATE_CTX):
             continue
         seen.append(key)
     return seen
+
+
+def drop_template_attachments(required_files: list[str], ques_all: str) -> list[str]:
+    """剔除 Coordinator 误声明的模板附件（08832b52 实证：Coordinator 会把
+    结果模板附件写进 required_files，导致 G1 误拦后 AUTO_MODE 降级）。
+
+    判据：题面中该附件编号的【全部】提及都在模板句里（即
+    extract_required_from_problem 也会跳过它）→ 纯模板附件，剔除；
+    题面完全未提及的编号保守保留（正则覆盖不到的引用仍算必需）。
+    """
+    normalized = unicodedata.normalize("NFKC", ques_all)
+    all_nums: set[str] = set()
+    for m in _ATTACHMENT_PAT.finditer(normalized):
+        all_nums |= _attachment_numbers(m.group(1))
+    non_template_nums: set[str] = set()
+    for key in extract_required_from_problem(ques_all):
+        non_template_nums |= _attachment_numbers(key)
+
+    kept: list[str] = []
+    for name in required_files:
+        nums = _attachment_numbers(name)
+        if nums and nums <= all_nums and not (nums & non_template_nums):
+            continue  # 题面提及过该编号且全部是模板句
+        kept.append(name)
+    return kept
 
 
 def check_data_completeness(

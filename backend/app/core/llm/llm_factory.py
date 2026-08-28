@@ -27,6 +27,7 @@ class LLMFactory:
             max_tokens=settings.COORDINATOR_MAX_TOKENS,
             reasoning_effort=settings.COORDINATOR_REASONING_EFFORT,
             thinking_budget=settings.COORDINATOR_THINKING_BUDGET,
+            fallback_models=settings.COORDINATOR_MODELS,
         )
 
         modeler_llm = LLM(
@@ -38,6 +39,7 @@ class LLMFactory:
             max_tokens=settings.MODELER_MAX_TOKENS,
             reasoning_effort=settings.MODELER_REASONING_EFFORT,
             thinking_budget=settings.MODELER_THINKING_BUDGET,
+            fallback_models=settings.MODELER_MODELS,
         )
 
         coder_llm = LLM(
@@ -49,6 +51,7 @@ class LLMFactory:
             max_tokens=settings.CODER_MAX_TOKENS,
             reasoning_effort=settings.CODER_REASONING_EFFORT,
             thinking_budget=settings.CODER_THINKING_BUDGET,
+            fallback_models=settings.CODER_MODELS,
         )
 
         writer_llm = LLM(
@@ -60,6 +63,7 @@ class LLMFactory:
             max_tokens=settings.WRITER_MAX_TOKENS,
             reasoning_effort=settings.WRITER_REASONING_EFFORT,
             thinking_budget=settings.WRITER_THINKING_BUDGET,
+            fallback_models=settings.WRITER_MODELS,
         )
 
         return coordinator_llm, modeler_llm, coder_llm, writer_llm
@@ -73,4 +77,5 @@ class LLMFactory:
             base_url=settings.REVIEW_BASE_URL or settings.COORDINATOR_BASE_URL,
             task_id=self.task_id,
             max_tokens=settings.REVIEW_MAX_TOKENS or settings.COORDINATOR_MAX_TOKENS,
+            fallback_models=settings.REVIEW_MODELS or settings.COORDINATOR_MODELS,
         )

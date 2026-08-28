@@ -10,6 +10,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from app.config.setting import settings
 from app.services.redis_manager import redis_manager
 from app.schemas.response import SystemMessage
 from app.utils.log_util import logger
@@ -64,7 +65,22 @@ async def wait_for_approval(
         SystemMessage(content=f"流水线已挂起，等待人工审批：{checkpoint}（无响应将一直等待）", type="warning"),
     )
     try:
-        await p.event.wait()  # 永久等待，无超时
+        # 永久等待，无超时自动放行；每 HIL_TIMEOUT 秒仍未响应则提醒一次
+        remind_after = max(int(settings.HIL_TIMEOUT), 1)
+        while not p.event.is_set():
+            try:
+                await asyncio.wait_for(p.event.wait(), timeout=remind_after)
+            except TimeoutError:
+                await redis_manager.publish_message(
+                    task_id,
+                    SystemMessage(
+                        content=f"审批已等待 {remind_after} 秒仍无响应，继续等待（绝不自动放行）",
+                        type="warning",
+                    ),
+                )
+                logger.warning(
+                    f"[审批] {checkpoint} 等待 {remind_after}s 无响应，继续等待"
+                )
     finally:
         _pending.pop(task_id, None)
 

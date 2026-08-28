@@ -8,9 +8,6 @@ import mcmCupC from "@/assets/example/2024高教杯C题.png";
 import wuyiCupC from "@/assets/example/2025五一杯C题.png";
 import huashuCupC from "@/assets/example/华数杯2023年C题.png";
 
-// ---- Types ----
-
-/** 建模样例数据结构 */
 interface ModelingExample {
 	id: number;
 	title: string;
@@ -21,11 +18,8 @@ interface ModelingExample {
 	image: string;
 }
 
-// ---- Reactive State ----
-
 const router = useRouter();
 
-/** 样例列表 */
 const examples = ref<ModelingExample[]>([
 	{
 		id: 1,
@@ -57,7 +51,6 @@ const examples = ref<ModelingExample[]>([
 	},
 ]);
 
-/** 选择样例并跳转到任务创建步骤 */
 const selectExample = async (example: ModelingExample) => {
 	const res = await exampleAPI(example.id.toString(), example.source);
 	const task_id = res?.data?.task_id;
@@ -66,49 +59,22 @@ const selectExample = async (example: ModelingExample) => {
 </script>
 
 <template>
-  <div class="mt-8 mb-12">
-    <h2 class="text-xl font-medium mb-4">样例解析</h2>
-    <p class="text-sm text-muted-foreground mb-6">浏览历年数模竞赛优秀案例，快速开始你的建模任务</p>
-
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+  <div class="mt-5">
+    <h2 class="text-xs font-medium text-muted-foreground mb-2">案例</h2>
+    <div class="border rounded-md divide-y">
       <div v-for="example in examples" :key="example.id"
-        class="border rounded-lg overflow-hidden hover:shadow-md transition-shadow group">
-        <!-- 题目缩略图 -->
-        <div class="relative h-48 overflow-hidden bg-muted">
-          <img :src="example.image" alt="题目缩略图"
-            class="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300" />
-          <div
-            class="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-            <Button variant="secondary" size="sm" @click="selectExample(example)">
-              查看详情
-            </Button>
-          </div>
+        class="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:gap-3">
+        <div class="flex min-w-0 flex-1 items-center gap-3">
+        <img :src="example.image" alt=""
+          class="h-10 w-16 rounded border object-cover object-top shrink-0 bg-muted" />
+        <div class="min-w-0 flex-1">
+          <div class="text-sm font-medium truncate">{{ example.title }}</div>
+          <div class="text-xs text-muted-foreground">{{ example.source }}</div>
         </div>
-
-        <!-- 题目信息 -->
-        <div class="p-4">
-          <div class="flex justify-between items-start mb-2">
-            <h3 class="font-medium line-clamp-2">{{ example.title }}</h3>
-            <span class="text-xs px-2 py-0.5 bg-primary/10 text-primary rounded-full">
-              {{ example.tags[0] }}
-            </span>
-          </div>
-          <p class="text-xs text-muted-foreground mb-2">{{ example.source }}</p>
-          <p class="text-sm text-muted-foreground mb-4 line-clamp-2">{{ example.description }}</p>
-
-          <!-- 标签 -->
-          <div class="flex flex-wrap gap-1 mb-4">
-            <span v-for="(tag, _) in example.tags.slice(1)" :key="tag"
-              class="px-2 py-0.5 bg-muted text-muted-foreground rounded-full text-xs">
-              {{ tag }}
-            </span>
-          </div>
-
-          <!-- 按钮 -->
-          <Button variant="default" size="sm" class="w-full" @click="selectExample(example)">
-            使用该案例
-          </Button>
         </div>
+        <Button variant="outline" size="sm" class="w-full shrink-0 sm:w-auto" @click="selectExample(example)">
+          使用该案例
+        </Button>
       </div>
     </div>
   </div>

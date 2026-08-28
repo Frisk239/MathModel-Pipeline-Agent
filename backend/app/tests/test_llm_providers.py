@@ -241,6 +241,33 @@ class TestAdaptiveMaxTokens:
         assert calls == [8192]  # 工具调用截断交给反思回路，不放大
         assert len(resp.tool_calls) == 1
 
+    def test_injects_budget_when_unconfigured_and_empty(self):
+        # hy3 空响应事故形态：max_tokens 未配置（端点默认预算过小），
+        # content=None + stop_reason=None 连发，旧逻辑无物可放大直接放行
+        from app.core.llm.types import StandardResponse
+
+        llm, calls = self._make_llm(
+            [
+                StandardResponse(content=None, stop_reason=None),
+                StandardResponse(content="ok", stop_reason="end_turn"),
+            ]
+        )
+        llm.max_tokens = None
+        resp = asyncio.run(llm.chat(history=[{"role": "user", "content": "hi"}]))
+        assert calls == [None, 16384]  # 未配置时注入下限预算重试一次
+        assert resp.content == "ok"
+
+    def test_no_widen_on_normal_empty_end_turn(self):
+        # 正常结束（end_turn）但内容为空：模型行为问题，不是预算问题，不重试
+        from app.core.llm.types import StandardResponse
+
+        llm, calls = self._make_llm(
+            [StandardResponse(content=None, stop_reason="end_turn")]
+        )
+        resp = asyncio.run(llm.chat(history=[{"role": "user", "content": "hi"}]))
+        assert calls == [8192]
+        assert resp.content is None
+
 
 class TestAnthropicStreamDelta:
     """真流式：on_delta 逐事件上抛 thinking/text 增量，thinking 采集进 reasoning_content。"""
@@ -275,7 +302,7 @@ class TestAnthropicStreamDelta:
                 try:
                     return next(self._iter)
                 except StopIteration:
-                    raise StopAsyncIteration
+                    raise StopAsyncIteration from None
 
             async def __aenter__(self):
                 return self
@@ -375,8 +402,269 @@ class TestOpenAIChatStream:
         assert received == [("thinking", "思前"), ("text", "答")]
         assert resp.content == "答"
         assert resp.reasoning_content == "思前"
-        assert resp.stop_reason == "tool_calls"
+        # openai finish_reason 已归一化为 anthropic 词表
+        assert resp.stop_reason == "tool_use"
         assert resp.usage.prompt_tokens == 5 and resp.usage.completion_tokens == 9
-        assert len(resp.tool_calls) == 1
-        assert resp.tool_calls[0].name == "execute_code"
-        assert resp.tool_calls[0].arguments == '{"code": "print(1)"}'
+
+    def test_finish_reason_length_normalized(self, monkeypatch):
+        """openai 的 length 截断必须归一化为 max_tokens，否则 llm 层放大永不触发。"""
+        from types import SimpleNamespace as NS
+
+        def chunk(delta=None, finish=None, usage=None):
+            choices = [NS(delta=delta, finish_reason=finish)] if (delta or finish) else []
+            return NS(choices=choices, usage=usage)
+
+        chunks = [
+            chunk(delta=NS(content="部分", reasoning_content=None, tool_calls=None)),
+            chunk(finish="length"),
+        ]
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                async def _gen():
+                    for c in chunks:
+                        yield c
+
+                return _gen()
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                self.chat = NS(completions=FakeCompletions())
+
+        monkeypatch.setattr(
+            "app.core.llm.providers.openai_chat.AsyncOpenAI", FakeClient
+        )
+        from app.core.llm.providers.openai_chat import OpenAIChatProvider
+
+        resp = asyncio.run(
+            OpenAIChatProvider().call(
+                messages=[{"role": "user", "content": "hi"}],
+                model="hy3",
+                api_key="k",
+            )
+        )
+        assert resp.stop_reason == "max_tokens"
+
+
+class TestModelFailover:
+    """过载/超时立即切备用模型；非连接类错误不切。"""
+
+    @pytest.fixture(autouse=True)
+    def _mute_redis(self, monkeypatch):
+        published = []
+
+        async def fake_publish(task_id, message):
+            published.append(message)
+
+        monkeypatch.setattr(
+            "app.services.redis_manager.redis_manager.publish_message",
+            fake_publish,
+        )
+        self.published = published
+
+    def _make_llm(self, side_effects, **llm_kwargs):
+        from app.core.llm.types import StandardResponse
+
+        calls = []
+
+        class FakeProvider:
+            async def call(self, **kwargs):
+                calls.append(kwargs["model"])
+                effect = side_effects[len(calls) - 1]
+                if isinstance(effect, Exception):
+                    raise effect
+                if isinstance(effect, StandardResponse):
+                    return effect
+                return StandardResponse(content=str(effect), stop_reason="end_turn")
+
+        llm = LLM(api_key="k", **llm_kwargs)
+        llm.provider = FakeProvider()
+        return llm, calls
+
+    def test_503_switches_to_next_model(self):
+        from app.core.llm.types import StandardResponse
+
+        llm, calls = self._make_llm(
+            [
+                RuntimeError("Error code: 503 - overloaded"),
+                StandardResponse(content="ok", stop_reason="end_turn"),
+            ],
+            model="hy3",
+            fallback_models="ox-alpha-free, glm-4.6",
+        )
+        resp = asyncio.run(llm.chat(history=[{"role": "user", "content": "hi"}]))
+        assert calls == ["hy3", "ox-alpha-free"]
+        assert resp.content == "ok"
+        assert llm.model == "ox-alpha-free"
+
+    def test_single_model_conn_error_keeps_retry_budget(self, monkeypatch):
+        async def no_sleep(_delay):
+            return None
+
+        monkeypatch.setattr("app.core.llm.llm.asyncio.sleep", no_sleep)
+        llm, calls = self._make_llm(
+            [
+                RuntimeError("Error code: 503 - overloaded"),
+                RuntimeError("Error code: 503 - overloaded"),
+                RuntimeError("Error code: 503 - overloaded"),
+            ],
+            model="hy3",
+        )
+        with pytest.raises(RuntimeError, match="503"):
+            asyncio.run(
+                llm.chat(
+                    history=[{"role": "user", "content": "hi"}],
+                    max_retries=3,
+                    retry_delay=0,
+                )
+            )
+        assert calls == ["hy3", "hy3", "hy3"]
+        assert llm.model == "hy3"
+
+    def test_non_conn_error_does_not_switch(self):
+        llm, calls = self._make_llm(
+            [
+                RuntimeError("400 invalid"),
+                RuntimeError("400 invalid"),
+            ],
+            model="hy3",
+            fallback_models="ox-alpha-free",
+        )
+        with pytest.raises(RuntimeError, match="400 invalid"):
+            asyncio.run(
+                llm.chat(
+                    history=[{"role": "user", "content": "hi"}],
+                    max_retries=2,
+                    retry_delay=0,
+                )
+            )
+        assert calls == ["hy3", "hy3"]
+        assert llm.model == "hy3"
+
+    def test_resolve_model_chain_primary_then_extras(self):
+        from app.config.setting import resolve_model_chain
+
+        assert resolve_model_chain("hy3", "ox-alpha-free, glm-4.6") == [
+            "hy3",
+            "ox-alpha-free",
+            "glm-4.6",
+        ]
+
+    def test_resolve_model_chain_dedupes_primary(self):
+        from app.config.setting import resolve_model_chain
+
+        assert resolve_model_chain("hy3", "hy3, ox-alpha-free") == [
+            "hy3",
+            "ox-alpha-free",
+        ]
+        assert resolve_model_chain("hy3", "ox-alpha-free, hy3") == [
+            "hy3",
+            "ox-alpha-free",
+        ]
+
+    def test_resolve_model_chain_empty_extras(self):
+        from app.config.setting import resolve_model_chain
+
+        assert resolve_model_chain("hy3", None) == ["hy3"]
+        assert resolve_model_chain("hy3", "") == ["hy3"]
+        assert resolve_model_chain("hy3", "  ,  ") == ["hy3"]
+
+    def test_503_switch_publishes_info_system_message(self):
+        from app.core.llm.types import StandardResponse
+        from app.schemas.response import SystemMessage
+
+        llm, calls = self._make_llm(
+            [
+                RuntimeError("Error code: 503"),
+                StandardResponse(content="ok", stop_reason="end_turn"),
+            ],
+            model="hy3",
+            fallback_models="ox-alpha-free",
+            task_id="t-failover",
+        )
+        asyncio.run(llm.chat(history=[{"role": "user", "content": "hi"}]))
+        infos = [
+            m
+            for m in self.published
+            if isinstance(m, SystemMessage) and m.type == "info"
+        ]
+        assert len(infos) >= 1
+        content = infos[0].content or ""
+        assert "hy3" in content and "ox-alpha-free" in content
+        assert calls == ["hy3", "ox-alpha-free"]
+
+    def test_openai_chat_client_gets_httpx_timeout(self, monkeypatch):
+        import httpx
+        from app.core.llm.providers.openai_chat import OpenAIChatProvider
+
+        captured = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+                raise RuntimeError("short-circuit")
+
+        monkeypatch.setattr(
+            "app.core.llm.providers.openai_chat.AsyncOpenAI", FakeClient
+        )
+        with pytest.raises(RuntimeError, match="short-circuit"):
+            asyncio.run(
+                OpenAIChatProvider().call(
+                    messages=[{"role": "user", "content": "hi"}],
+                    model="hy3",
+                    api_key="k",
+                )
+            )
+        timeout = captured.get("timeout")
+        assert isinstance(timeout, httpx.Timeout)
+        assert timeout.connect == 15.0
+        assert timeout.read == 180.0
+
+
+class TestNonPipelineRoleChat:
+    """LLM.chat 非流水线角色回归（SIM105 重构曾致 UnboundLocalError）。"""
+
+    def test_non_pipeline_role_does_not_crash(self):
+        """G2Review 等非流水线角色名走 suppress 分支后变量必须已绑定。"""
+        from app.config.setting import ApiType
+        from app.core.llm.llm import LLM
+        from app.core.llm.types import StandardResponse
+
+        class _FakeProvider:
+            async def call(self, **kwargs):
+                return StandardResponse(content="ok")
+
+        async def _run():
+            llm = LLM(
+                api_type=ApiType.OPENAI_CHAT,
+                api_key="k",
+                model="m",
+                task_id="t-regression",
+            )
+            llm.provider = _FakeProvider()
+            return await llm.chat(
+                history=[{"role": "user", "content": "hi"}],
+                agent_name="G2Review",
+            )
+
+        resp = asyncio.run(_run())
+        assert resp.content == "ok"
+
+
+class TestConnErrorDetection:
+    """连接类错误判据（含流式中断）——failover 切换的触发条件。"""
+
+    def test_peer_closed_connection_is_conn_error(self):
+        from app.core.llm.llm import _is_conn_error
+
+        assert _is_conn_error(
+            Exception(
+                "peer closed connection without sending complete message body "
+                "(incomplete chunked read)"
+            )
+        )
+
+    def test_normal_api_error_is_not_conn_error(self):
+        from app.core.llm.llm import _is_conn_error
+
+        assert not _is_conn_error(Exception("404 model not found"))

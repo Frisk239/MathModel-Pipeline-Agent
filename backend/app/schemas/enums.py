@@ -4,9 +4,9 @@ from enum import Enum
 
 
 class CompTemplate(str, Enum):
-    """竞赛模板类型。"""
+    """竞赛模板类型（美赛模板已下架：无 EN 论文章节引擎，等排期后随 PDF 题目导入一并加回）。"""
+
     CHINA = "CHINA"
-    AMERICAN = "AMERICAN"
 
 
 class FormatOutPut(str, Enum):

@@ -24,7 +24,6 @@ dependencies = [
     "pydantic-settings>=2.8.0",
     "pymupdf>=1.24.0",
     "pypandoc-binary>=1.15",
-    "rank-bm25>=0.2.2",
     "redis>=5.2.1",
     "requests>=2.32.0",
     "scikit-learn>=1.6.1",
@@ -43,6 +42,10 @@ dev = [
 ]
 
 
+
+[tool.pytest.ini_options]
+testpaths = ["app/tests"]
+addopts = "-q"
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
@@ -80,11 +83,10 @@ line-length = 88
 indent-width = 4
 
 [tool.ruff.lint]
-# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
-# Unlike Flake8, Ruff doesn't enable pycodestyle warnings (`W`) or
-# McCabe complexity (`C901`) by default.
-select = ["E4", "E7", "E9", "F"]
-ignore = []
+# E4/E7/E9/F 基础集 + bugbear(B) / 现代化(UP) / 简化(SIM)
+# UP007（Optional[X] → X | None 迁移，53 处存量）待专项迁移后再启用
+select = ["E4", "E7", "E9", "F", "B", "UP", "SIM"]
+ignore = ["UP007"]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]
@@ -92,6 +94,10 @@ unfixable = []
 
 # Allow unused variables when underscore-prefixed.
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI 的 Form/File/Depends 依赖注入必须写在参数默认值位置
+"app/routers/*" = ["B008"]
 
 [tool.ruff.format]
 # Like Black, use double quotes for strings.

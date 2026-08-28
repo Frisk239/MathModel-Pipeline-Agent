@@ -1,8 +1,24 @@
 """OpenAI Chat Completions API Provider（流式聚合）。"""
 
+import time
+
 from openai import AsyncOpenAI, BadRequestError
-from app.core.llm.providers.base import BaseProvider, HTTP_USER_AGENT
+from app.core.llm.providers.base import (
+    BaseProvider,
+    HTTP_USER_AGENT,
+    llm_http_timeout,
+)
 from app.core.llm.types import StandardResponse, ToolCall, Usage
+
+# openai finish_reason → 归一化 stop_reason（anthropic 词表）。
+# llm 层的输出预算放大判断的是 "max_tokens"，不翻译则 openai 系协议
+# 的 length 截断永远不会触发放大（hy3 空响应事故的根因之一）。
+_OPENAI_FINISH_TO_STOP = {
+    "stop": "end_turn",
+    "length": "max_tokens",
+    "tool_calls": "tool_use",
+    "content_filter": "refusal",
+}
 
 
 class OpenAIChatProvider(BaseProvider):
@@ -31,6 +47,7 @@ class OpenAIChatProvider(BaseProvider):
             api_key=api_key,
             base_url=base_url,
             default_headers={"User-Agent": HTTP_USER_AGENT},
+            timeout=llm_http_timeout(),
         )
 
         kwargs: dict = {"model": model, "messages": messages, "stream": True}
@@ -52,7 +69,10 @@ class OpenAIChatProvider(BaseProvider):
             tc_acc: dict[int, dict] = {}
             finish_reason: str | None = None
             usage = Usage()
+            first_token_ms = 0
             async for chunk in stream:
+                if not first_token_ms:
+                    first_token_ms = round((time.monotonic() - t0) * 1000)
                 if getattr(chunk, "usage", None):
                     usage = Usage(
                         prompt_tokens=chunk.usage.prompt_tokens or 0,
@@ -84,6 +104,8 @@ class OpenAIChatProvider(BaseProvider):
                         if tc.function and tc.function.arguments:
                             acc["arguments"] += tc.function.arguments
 
+            usage.first_token_ms = first_token_ms
+            usage.latency_ms = round((time.monotonic() - t0) * 1000)
             return StandardResponse(
                 content="".join(content_parts) or None,
                 reasoning_content="".join(reasoning_parts) or None,
@@ -92,9 +114,10 @@ class OpenAIChatProvider(BaseProvider):
                     for _, a in sorted(tc_acc.items())
                 ],
                 usage=usage,
-                stop_reason=finish_reason,
+                stop_reason=_OPENAI_FINISH_TO_STOP.get(finish_reason, finish_reason),
             )
 
+        t0 = time.monotonic()
         try:
             stream = await client.chat.completions.create(**kwargs)
             return await _consume()
@@ -103,5 +126,6 @@ class OpenAIChatProvider(BaseProvider):
             if "reasoning_effort" not in kwargs:
                 raise
             kwargs.pop("reasoning_effort")
+            t0 = time.monotonic()
             stream = await client.chat.completions.create(**kwargs)
             return await _consume()
