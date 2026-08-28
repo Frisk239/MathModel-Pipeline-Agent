@@ -36,7 +36,11 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+      # action 只读仓库根的 packageManager 字段，前端在子目录故需显式指定版本
+      # （与 frontend/package.json 的 packageManager 保持同步）
       - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.3
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
