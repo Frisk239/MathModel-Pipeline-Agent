@@ -649,3 +649,22 @@ class TestNonPipelineRoleChat:
 
         resp = asyncio.run(_run())
         assert resp.content == "ok"
+
+
+class TestConnErrorDetection:
+    """连接类错误判据（含流式中断）——failover 切换的触发条件。"""
+
+    def test_peer_closed_connection_is_conn_error(self):
+        from app.core.llm.llm import _is_conn_error
+
+        assert _is_conn_error(
+            Exception(
+                "peer closed connection without sending complete message body "
+                "(incomplete chunked read)"
+            )
+        )
+
+    def test_normal_api_error_is_not_conn_error(self):
+        from app.core.llm.llm import _is_conn_error
+
+        assert not _is_conn_error(Exception("404 model not found"))

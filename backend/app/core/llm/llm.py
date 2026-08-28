@@ -30,7 +30,7 @@ class LLMConfigError(RuntimeError):
 
 
 def _is_conn_error(err: BaseException) -> bool:
-    """503/timeout/overloaded/rate-limit: switch model, do not burn MAX_RETRIES."""
+    """503/timeout/overloaded/rate-limit/流式中断: switch model, do not burn MAX_RETRIES."""
     err_msg = str(err)
     return (
         "Connection error" in err_msg
@@ -41,6 +41,10 @@ def _is_conn_error(err: BaseException) -> bool:
         or "529" in err_msg
         or "overloaded" in err_msg.lower()
         or "rate limit" in err_msg.lower()
+        # 供应商/中间层流式传输中途掐断（httpx RemoteProtocolError）：
+        # 重试幂等，与连接类错误同待遇切模型
+        or "peer closed connection" in err_msg
+        or "incomplete chunked read" in err_msg.lower()
     )
 
 
