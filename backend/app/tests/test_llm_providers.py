@@ -619,3 +619,33 @@ class TestModelFailover:
         assert isinstance(timeout, httpx.Timeout)
         assert timeout.connect == 15.0
         assert timeout.read == 180.0
+
+
+class TestNonPipelineRoleChat:
+    """LLM.chat 非流水线角色回归（SIM105 重构曾致 UnboundLocalError）。"""
+
+    def test_non_pipeline_role_does_not_crash(self):
+        """G2Review 等非流水线角色名走 suppress 分支后变量必须已绑定。"""
+        from app.config.setting import ApiType
+        from app.core.llm.llm import LLM
+        from app.core.llm.types import StandardResponse
+
+        class _FakeProvider:
+            async def call(self, **kwargs):
+                return StandardResponse(content="ok")
+
+        async def _run():
+            llm = LLM(
+                api_type=ApiType.OPENAI_CHAT,
+                api_key="k",
+                model="m",
+                task_id="t-regression",
+            )
+            llm.provider = _FakeProvider()
+            return await llm.chat(
+                history=[{"role": "user", "content": "hi"}],
+                agent_name="G2Review",
+            )
+
+        resp = asyncio.run(_run())
+        assert resp.content == "ok"
