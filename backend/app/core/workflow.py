@@ -945,7 +945,16 @@ class MathModelWorkFlow(WorkFlow):
             settings.REVIEW_MODEL is None or settings.REVIEW_MODEL == settings.COORDINATOR_MODEL
         )
         paper_text = res_md.read_text(encoding="utf-8") if res_md.exists() else ""
-        g4_report = await run_g4_final_review(ctx.review_llm, paper_text, same_family)
+        # 参数表覆盖检查的输入：建模蓝图全文（各问方案拼接；v4 2-2）
+        model_plan_text = ""
+        if ctx.modeler_response is not None:
+            model_plan_text = "\n".join(
+                str(v)
+                for v in (getattr(ctx.modeler_response, "questions_solution", None) or {}).values()
+            )
+        g4_report = await run_g4_final_review(
+            ctx.review_llm, paper_text, same_family, model_plan_text=model_plan_text
+        )
         self.gate_reports.append(g4_report)
         leftover_items = []
 

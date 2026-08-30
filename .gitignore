@@ -65,3 +65,6 @@ Thumbs.db
 Desktop.ini
 zcode/
 .scratch/
+
+# pytest 覆盖率产物
+backend/.coverage
