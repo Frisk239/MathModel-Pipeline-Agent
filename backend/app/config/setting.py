@@ -143,6 +143,8 @@ class Settings(BaseSettings):
     # A/B 验证开关：质量门（G2 门循环/G3 修复回路/G4 终审）与三期 Agent 契约可整体关闭还原基线
     QUALITY_GATES_ENABLED: bool = True
     AGENT_CONTRACTS_ENABLED: bool = True
+    # G2 代码质量门修复轮上限（A/B 实测 3 轮未能清零 critical，默认放宽到 5）
+    G2_MAX_REPAIR_ROUNDS: int = 5
 
     model_config = SettingsConfigDict(
         env_file=".env.dev",
