@@ -24,6 +24,7 @@ from app.core.quality.recompute import (
     df_n_consistency,
     grim_mean_check,
     numeric_conservation,
+    param_table_coverage,
     pvalue_recompute,
     scan_statistical_claims,
 )
@@ -46,7 +47,7 @@ G4_PROMPT = f"""你是数学建模竞赛的终审评委。对以下论文做七�
 1. 每个维度输出五档判据之一：{VERDICT_SCALE}（禁止打分）；
 2. 对每个 DOES_NOT_MEET / PARTLY_MEETS 的维度，给出具体问题条目（问题/证据位置/严重度/验收判据）；
 3. 严重度定义：critical=单条不修即否决核心结论；major=实质削弱但核心存活；minor=不影响核心；
-4. 同时检查：正文数值与图表/结论一致、章节完整、无占位符、结论不超出证据。
+4. 同时检查：正文数值与图表/结论一致、章节完整、无占位符、结论不超出证据、关键参数（符号/取值/单位）在正文有参数表可查。
 
 输出严格 JSON（无代码块标记）：
 {{"dimensions": {{"model_soundness": "MEETS", ...七个维度...}},
@@ -82,11 +83,15 @@ def _stated_n(paper_text: str) -> int | None:
     return ns.pop() if len(ns) == 1 else None
 
 
-def run_g4_mechanical_recompute(paper_text: str) -> list[RoadmapItem]:
-    """确定性算术验证：GRIM 均值可达性 + t/F/χ² p 值重算（无 LLM 参与）。
+def run_g4_mechanical_recompute(
+    paper_text: str, model_plan_text: str = ""
+) -> list[RoadmapItem]:
+    """确定性算术验证：GRIM 均值可达性 + t/F/χ² p 值重算 + 参数表覆盖（无 LLM 参与）。
 
     提取不到可重算的统计陈述（数学建模论文常见）时返回空列表——
     不惩罚；mismatch 视为 critical must_fix（数值不可复算是硬伤）。
+    model_plan_text 为建模蓝图全文（各问方案拼接）；缺省不查参数表覆盖
+    （A/B 基线路径无蓝图输入）。
     """
     claims = list(scan_statistical_claims(paper_text))
     items: list[RoadmapItem] = []
@@ -116,6 +121,31 @@ def run_g4_mechanical_recompute(paper_text: str) -> list[RoadmapItem]:
                 target="论文正文",
             )
         )
+
+    # 参数表覆盖（v4 2-2）：蓝图中显式赋值的关键参数必须正文可查——
+    # 08832b52 实证 G4 must_fix「θ/K/增长率等关键参数未在正文给出、无法复算」。
+    # 缺失聚合为一条 MAJOR must_fix；无蓝图输入时整体跳过（not_applicable）。
+    if model_plan_text:
+        missing = param_table_coverage(model_plan_text, paper_text)
+        if missing:
+            items.append(
+                RoadmapItem(
+                    id="g4-param-table",
+                    problem=(
+                        f"〔参数表覆盖〕建模方案中显式赋值的关键参数未在论文正文出现："
+                        f"{'、'.join(missing)}——参数取值不可溯源复算"
+                    ),
+                    evidence_anchor="、".join(missing),
+                    severity=Severity.MAJOR,
+                    obligation=Obligation.MUST_FIX,
+                    cost_scope="section",
+                    acceptance_criteria=(
+                        "在符号说明/模型建立节补全参数表（符号/含义/取值/单位/来源），"
+                        "使每个声明赋值的参数可溯源复算"
+                    ),
+                    target="论文正文（符号说明/模型建立节）",
+                )
+            )
 
     # df↔N 一致性观察项：t 检验的配对/独立身份无法从文本判定（df+1 与 df+2
     # 两种隐含 N），仅当两种身份都对不上声明 N 时记录；severity=MINOR +
@@ -155,6 +185,7 @@ async def run_g4_final_review(
     review_llm: LLM,
     paper_text: str,
     same_family_as_task_model: bool,
+    model_plan_text: str = "",
 ) -> GateReport:
     """首审：七维评审 + 机械裁决 + 判官披露 + 数值守恒（有旧版时）。"""
     disclosure = (
@@ -203,8 +234,8 @@ async def run_g4_final_review(
             )
         )
 
-    # 机械重算（GRIM/p 值）与 LLM 评审互补：确定性验证不依赖判官
-    mech_items = run_g4_mechanical_recompute(paper_text)
+    # 机械重算（GRIM/p 值/参数表覆盖）与 LLM 评审互补：确定性验证不依赖判官
+    mech_items = run_g4_mechanical_recompute(paper_text, model_plan_text)
     items.extend(mech_items)
 
     blocking = [it for it in items if it.obligation == Obligation.MUST_FIX]

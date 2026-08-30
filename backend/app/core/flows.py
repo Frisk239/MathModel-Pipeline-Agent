@@ -111,12 +111,17 @@ class Flows:
             写作流程配置字典，键为章节名，值为写作提示。
         """
         model_build_solve = user_output.get_model_build_solve()
+        # v4 2-2 参数表纪律：任务级 prompt 落点（三期经验——系统提示词会被任务指令压过）
+        symbol_req = (
+            "，建模方案中显式赋值的关键参数（符号=数值形式）必须全部进入符号说明表，"
+            "列全符号/含义/取值/单位/来源"
+        )
         flows = {
             "firstPage": f"""问题背景{bg_ques_all},不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["firstPage"]}，撰写标题、中文摘要（五组件：背景/目的/方法/发现/结论，发现带具体数字）、**英文 Abstract（按同五组件独立撰写，150-300 词，禁止逐句对译，关键数字必须与中文摘要完全一致）**、中英文关键词""",
             "RepeatQues": f"""问题背景{bg_ques_all},不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["RepeatQues"]}，撰写问题重述""",
             "analysisQues": f"""问题背景{bg_ques_all},不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["analysisQues"]}，撰写问题分析""",
             "modelAssumption": f"""问题背景{bg_ques_all},不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["modelAssumption"]}，撰写模型假设""",
-            "symbol": f"""不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["symbol"]}，撰写符号说明部分""",
+            "symbol": f"""不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["symbol"]}，撰写符号说明部分{symbol_req}""",
             "judge": f"""不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["judge"]}，撰写模型的评价部分""",
         }
         return flows
@@ -141,9 +146,15 @@ class Flows:
 
         questions_quesx_keys = self.get_questions_quesx_keys()
         bgc = self.questions["background"]
+        # v4 2-2 参数表纪律：θ/K 等关键参数不落正文则不可复算（08832b52 实证 must_fix）
+        param_req = (
+            "。**关键参数表**：本问模型使用的全部关键参数必须以表格形式写入正文"
+            "（列：符号/含义/取值/单位/来源），建模方案中显式赋值的参数一个都不能缺席；"
+            "未给出取值或来源的参数不得作为结论依据"
+        )
         quesx_writer_prompt = {
             key: f"""
-                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template[key]}
+                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template[key]}{param_req}
                 """
             for key in questions_quesx_keys
         }
@@ -154,7 +165,7 @@ class Flows:
                 """,
             **quesx_writer_prompt,
             "sensitivity_analysis": f"""
-                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template["sensitivity_analysis"]}
+                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template["sensitivity_analysis"]}{param_req}
                 """,
         }
 

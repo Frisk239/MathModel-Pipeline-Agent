@@ -198,6 +198,41 @@ def numeric_conservation(old_text: str, new_text: str) -> dict[str, list[str]]:
     }
 
 
+# ---- 参数表覆盖检查（v4 2-2：蓝图中显式赋值的关键参数必须在正文可查） ----
+
+# 只认「单符号 = 数值/区间」的显式赋值声明：θ = 0.95、K = 1201、α = 0.3~0.5。
+# 带下标/多字母符号（x_{ij}、w_i）与中文命名参数（增长率等）不收——误报率高，
+# 交给 Writer 参数表任务指令与 G4 LLM 评审兜底（宁缺毋滥，同模块纪律）。
+# 拉丁字母只收大写单字母（小写单字母在公式里多为局部变量）。
+_PARAM_DECL_RE = re.compile(
+    r"(?<![A-Za-z0-9_])"
+    r"([αβγδεζηθικλμνξπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΠΡΣΤΥΦΧΨΩA-Z])"
+    r"\s*=\s*"
+    r"-?\d+(?:\.\d+)?(?:%)?(?:\s*[~～至]\s*-?\d+(?:\.\d+)?(?:%)?)?"
+)
+
+# 提取结果超过此数视为蓝图口径存疑，整体放弃（与 _stated_n 多值放弃纪律一致）
+_MAX_PARAM_SYMBOLS = 15
+
+
+def extract_declared_params(blueprint_text: str) -> dict[str, str]:
+    """从建模蓝图提取显式赋值的参数符号 → 首个声明片段（保序去重）。"""
+    found: dict[str, str] = {}
+    for m in _PARAM_DECL_RE.finditer(blueprint_text):
+        symbol = m.group(1)
+        if symbol not in found:
+            found[symbol] = m.group(0)[:60]
+    if len(found) > _MAX_PARAM_SYMBOLS:
+        return {}
+    return found
+
+
+def param_table_coverage(blueprint_text: str, paper_text: str) -> list[str]:
+    """返回蓝图中声明赋值、但论文正文从未出现的参数符号（保序）。"""
+    declared = extract_declared_params(blueprint_text)
+    return [sym for sym in declared if sym not in paper_text]
+
+
 # ---- 文本统计陈述提取（G4 机械重算的输入层） ----
 
 
