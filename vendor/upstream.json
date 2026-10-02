@@ -1,8 +1,13 @@
 {
   "repo": "https://github.com/jihe520/MathModelAgent",
   "copied_sha": "83d8783187a2d29dda1b046cb667009cc50c8203",
-  "skills_synced_sha": "83d8783187a2d29dda1b046cb667009cc50c8203",
+  "skills_synced_sha": "03f4eb388b3862b7bde55b508dceaf3d6b39d5ac",
   "webui_watched_sha": "83d8783187a2d29dda1b046cb667009cc50c8203",
-  "sync_paths": ["skills"],
-  "watch_paths": ["backend", "frontend"]
+  "sync_paths": [
+    "skills"
+  ],
+  "watch_paths": [
+    "backend",
+    "frontend"
+  ]
 }
